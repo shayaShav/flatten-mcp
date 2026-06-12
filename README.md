@@ -187,7 +187,7 @@ See [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/do
 The entire server is four TypeScript files and two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [`zod`](https://www.npmjs.com/package/zod)) — it's a quick read.
 
 - **File access.** Every read and write is confined to Claude Code's session store, `~/.claude/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched.
-- **Network.** Zero network calls by default. When `ANTHROPIC_API_KEY` is set, exactly one endpoint is contacted: `POST https://api.anthropic.com/v1/messages/count_tokens` (free) to report exact token savings. The key is read from the environment, sent only to Anthropic, and never stored or logged. There is no other URL in the codebase.
+- **Network.** Zero network calls by default. When `ANTHROPIC_API_KEY` is set, exactly one endpoint is contacted: `POST https://api.anthropic.com/v1/messages/count_tokens` (free) to report exact token savings. The request body is the content being flattened — the same tool output and screenshots Anthropic already processed in the session — sent only to Anthropic for counting. The key is read from the environment, sent only as the auth header, and never stored or logged. There is no other URL in the codebase.
 - **No telemetry.** No analytics, no usage tracking, no phone-home.
 - **No shell execution, no hooks.** The server spawns no processes, executes no shell commands, installs no hooks, and does not need permission bypasses.
 - **Safe defaults.** The 10-second live-write guard refuses sessions that may still be active; `prune_flatten_artifacts` defaults to a dry run; the bundled `/flatten` command never passes `force`.
@@ -195,7 +195,7 @@ The entire server is four TypeScript files and two runtime dependencies ([`@mode
 
 ## Compatibility & roadmap
 
-- **Claude Code only, for now.** flatten-mcp reads Claude Code's session store at `~/.claude/projects/<encoded-project-dir>/*.jsonl`. It has been tested against Claude Code exclusively; the paths and the JSONL schema are specific to it and **will not work** for other agents or LLM CLIs as-is.
+- **Claude Code only, for now.** flatten-mcp reads Claude Code's session store at `~/.claude/projects/<encoded-project-dir>/*.jsonl`. It has been tested against Claude Code exclusively; the paths and the JSONL schema are specific to it and **will not work** for other agents or LLM CLIs as-is. Path handling is POSIX (macOS/Linux); Windows is untested.
 - **Planned — a pluggable session backend.** Porting to other agents means abstracting the storage location and the on-disk message format behind a small adapter. Contributions welcome.
 
 ## Contributing
