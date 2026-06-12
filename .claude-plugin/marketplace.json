@@ -1,0 +1,16 @@
+{
+    "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+    "name": "flatten-mcp",
+    "description": "Marketplace for the flatten-mcp plugin: flatten Claude Code sessions without lossy compaction.",
+    "owner": {
+        "name": "Shaya Shaviv"
+    },
+    "plugins": [
+        {
+            "name": "flatten-mcp",
+            "source": "./",
+            "description": "Flatten Claude Code sessions: keep every prompt and event verbatim, resume at a lower token count. Bundles the flatten MCP server and the /flatten command.",
+            "homepage": "https://github.com/shayaShav/flatten-mcp#readme"
+        }
+    ]
+}

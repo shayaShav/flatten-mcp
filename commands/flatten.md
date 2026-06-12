@@ -1,7 +1,7 @@
 ---
 description: Flatten a Claude Code session via *flatten-mcp* ONLY (not via bash). Move bulky tool output to a sidecar, keep silent and only give back summarized flattening stats.
 argument-hint: [<session-uuid> | latest]
-allowed-tools: mcp__flatten__flatten_session, mcp__flatten__list_sessions
+allowed-tools: mcp__flatten__flatten_session, mcp__flatten__list_sessions, mcp__plugin_flatten-mcp_flatten__flatten_session, mcp__plugin_flatten-mcp_flatten__list_sessions
 ---
 
 Flatten a Claude Code session using the **flatten** MCP server. Target: "$ARGUMENTS" (empty or "latest" = most recent flattenable session).
