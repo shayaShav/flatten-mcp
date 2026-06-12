@@ -28,7 +28,7 @@ function resolveProjectDir(projectDir?: string): string {
 
 const server = new McpServer({
     name: 'flatten-mcp',
-    version: '1.0.0',
+    version: '1.0.1',
 });
 
 // ─── Tool 1: list_sessions ──────────────────────────────────────────

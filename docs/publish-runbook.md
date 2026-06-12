@@ -124,6 +124,10 @@ Direct install channel (live immediately after push, no review — via this repo
   is bumped (docs: Version management). Bump it together with the npm version on every release.
 - `server.json` carries the exact npm version (ranges and `latest` are rejected by the registry
   schema) — publish a new `server.json` via `mcp-publisher publish` on every npm release.
+- `src/index.ts` hardcodes the server version in the `McpServer` constructor, and `manifest.json`
+  (the MCPB bundle manifest, used for the Smithery stdio release) pins it too — bump both with
+  the npm version, then rebuild and republish the bundle:
+  `smithery mcp publish ./flatten-mcp.mcpb -n shayaShav/flatten-mcp`.
 
 ## Plugin-channel tool names — RESOLVED (2026-06-13)
 
