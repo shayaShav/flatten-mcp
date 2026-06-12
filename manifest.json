@@ -1,0 +1,52 @@
+{
+    "manifest_version": "0.3",
+    "name": "flatten-mcp",
+    "display_name": "flatten-mcp",
+    "version": "1.0.1",
+    "description": "Flatten Claude Code sessions: keep every prompt and event verbatim, resume at a lower token count.",
+    "author": {
+        "name": "Shaya Shaviv",
+        "url": "https://github.com/shayaShav"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/shayaShav/flatten-mcp"
+    },
+    "homepage": "https://github.com/shayaShav/flatten-mcp#readme",
+    "license": "MIT",
+    "keywords": [
+        "mcp",
+        "claude-code",
+        "context-window",
+        "tokens",
+        "session",
+        "compaction"
+    ],
+    "server": {
+        "type": "node",
+        "entry_point": "dist/index.js",
+        "mcp_config": {
+            "command": "node",
+            "args": [
+                "${__dirname}/dist/index.js"
+            ],
+            "env": {
+                "ANTHROPIC_API_KEY": "${user_config.anthropic_api_key}"
+            }
+        }
+    },
+    "user_config": {
+        "anthropic_api_key": {
+            "type": "string",
+            "title": "Anthropic API key",
+            "description": "Optional. If set, token savings are counted exactly via Anthropic's free count_tokens endpoint instead of estimated locally.",
+            "sensitive": true,
+            "required": false
+        }
+    },
+    "compatibility": {
+        "runtimes": {
+            "node": ">=18"
+        }
+    }
+}

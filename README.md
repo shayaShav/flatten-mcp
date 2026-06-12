@@ -108,6 +108,15 @@ Register the local build instead:
 
 </details>
 
+### Uninstall
+
+```bash
+claude mcp remove flatten -s user       # unregister the server
+rm -f ~/.claude/commands/flatten.md     # remove the /flatten command, if installed
+```
+
+Flatten artifacts (`.flat.jsonl` sidecars, `.bak` backups) live next to your session files and are not deleted by uninstalling. To reclaim the disk, run `prune_flatten_artifacts` (with `include_sidecars: true`) **before** unregistering — or delete them manually from `~/.claude/projects/<encoded-project-dir>/`. Mind that flattened sessions need their sidecar for `retrieve_flattened` / `unflatten_session` — unflatten first if you want the bulk back inline.
+
 ### Configuration
 
 By default the server operates on **the project the CLI runs in** (its current working directory). Pass `project_dir` explicitly on any call to target a different project.
@@ -134,6 +143,15 @@ To preview without touching anything, ask for a **dry run** first. To undo, ask 
 
 > [!TIP]
 > Flattening needs no model intelligence — park a second window on a fast, inexpensive model (`/model haiku`) as a dedicated flattening station and just type `/flatten latest`.
+
+### Validate the claims yourself
+
+Every number flatten reports can be checked end to end in a couple of minutes:
+
+1. Pick a meaty session — or make one: have Claude read a few large files, then exit with `Ctrl-C`.
+2. In a new window, ask for a **dry run** — *"dry-run flatten the latest session"* — and read the report: `flattenedCount`, `contextTokensSaved` of `contextTokensTotal`, `diskBytesSaved`. Nothing has been written yet.
+3. Run `/flatten latest` for real, `claude --resume` the original session, and send any prompt — the context indicator drops by roughly the reported amount (exactly, when `ANTHROPIC_API_KEY` is set).
+4. Check reversibility: ask to **unflatten** the session, then diff the restored `.jsonl` against the `.jsonl.bak` backup created at flatten time — identical for Claude Code's canonical JSON.
 
 ## Tools
 
@@ -164,9 +182,20 @@ Everything the model needs to fetch the original — the id and the session — 
 
 See [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/docs/ARCHITECTURE.md) for the session JSONL format, the sidecar schema, and the marker protocol.
 
+## Security & disclosure
+
+The entire server is four TypeScript files and two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [`zod`](https://www.npmjs.com/package/zod)) — it's a quick read.
+
+- **File access.** Every read and write is confined to Claude Code's session store, `~/.claude/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched.
+- **Network.** Zero network calls by default. When `ANTHROPIC_API_KEY` is set, exactly one endpoint is contacted: `POST https://api.anthropic.com/v1/messages/count_tokens` (free) to report exact token savings. The request body is the content being flattened — the same tool output and screenshots Anthropic already processed in the session — sent only to Anthropic for counting. The key is read from the environment, sent only as the auth header, and never stored or logged. There is no other URL in the codebase.
+- **No telemetry.** No analytics, no usage tracking, no phone-home.
+- **No shell execution, no hooks.** The server spawns no processes, executes no shell commands, installs no hooks, and does not need permission bypasses.
+- **Safe defaults.** The 10-second live-write guard refuses sessions that may still be active; `prune_flatten_artifacts` defaults to a dry run; the bundled `/flatten` command never passes `force`.
+- **Prefer pinned versions?** The quick-start tracks `flatten-mcp@latest`; swap in an exact version (`npx -y flatten-mcp@1.0.1`) if you want to vet upgrades yourself.
+
 ## Compatibility & roadmap
 
-- **Claude Code only, for now.** flatten-mcp reads Claude Code's session store at `~/.claude/projects/<encoded-project-dir>/*.jsonl`. It has been tested against Claude Code exclusively; the paths and the JSONL schema are specific to it and **will not work** for other agents or LLM CLIs as-is.
+- **Claude Code only, for now.** flatten-mcp reads Claude Code's session store at `~/.claude/projects/<encoded-project-dir>/*.jsonl`. It has been tested against Claude Code exclusively; the paths and the JSONL schema are specific to it and **will not work** for other agents or LLM CLIs as-is. Path handling is POSIX (macOS/Linux); Windows is untested.
 - **Planned — a pluggable session backend.** Porting to other agents means abstracting the storage location and the on-disk message format behind a small adapter. Contributions welcome.
 
 ## Contributing

@@ -23,12 +23,17 @@ function resolveProjectDir(projectDir?: string): string {
     // Default to the project the CLI runs in. Claude Code spawns this stdio
     // server with cwd set to the workspace root, so process.cwd() IS that dir.
     // Pass project_dir explicitly to target a different project.
+    // Relative segments like ".." would escape the per-project session dir
+    // after encodeProjectDir, so only absolute paths are accepted.
+    if (projectDir && !path.isAbsolute(projectDir)) {
+        throw new Error(`project_dir must be an absolute path, got: ${projectDir}`);
+    }
     return projectDir || process.cwd();
 }
 
 const server = new McpServer({
     name: 'flatten-mcp',
-    version: '1.0.0',
+    version: '1.0.1',
 });
 
 // ─── Tool 1: list_sessions ──────────────────────────────────────────
