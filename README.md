@@ -1,3 +1,7 @@
+<p align="center">
+    <img src="https://raw.githubusercontent.com/shayaShav/flatten-mcp/main/assets/logo.png" alt="flatten-mcp logo" width="160">
+</p>
+
 # flatten-mcp
 
 > Resume the **exact same conversation** at a lower token cost — without compacting it into a lossy summary.

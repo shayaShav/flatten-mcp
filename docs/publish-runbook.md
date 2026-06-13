@@ -128,6 +128,9 @@ Direct install channel (live immediately after push, no review — via this repo
   (the MCPB bundle manifest, used for the Smithery stdio release) pins it too — bump both with
   the npm version, then rebuild and republish the bundle:
   `smithery mcp publish ./flatten-mcp.mcpb -n shayaShav/flatten-mcp`.
+  `manifest.json` declares `"icon": "assets/logo.png"` (a bundle-relative path per the MCPB
+  spec), so when staging the bundle contents (dist/ + package files), copy `assets/logo.png`
+  into the staging dir as well — otherwise the bundle ships a dangling icon reference.
 
 ## Plugin-channel tool names — RESOLVED (2026-06-13)
 
