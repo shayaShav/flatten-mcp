@@ -9,6 +9,15 @@
     },
     "version": "1.0.1",
     "websiteUrl": "https://github.com/shayaShav/flatten-mcp#readme",
+    "icons": [
+        {
+            "src": "https://raw.githubusercontent.com/shayaShav/flatten-mcp/main/assets/logo.png",
+            "mimeType": "image/png",
+            "sizes": [
+                "1536x1536"
+            ]
+        }
+    ],
     "packages": [
         {
             "registryType": "npm",

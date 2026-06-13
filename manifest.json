@@ -4,6 +4,7 @@
     "display_name": "flatten-mcp",
     "version": "1.0.1",
     "description": "Flatten Claude Code sessions: keep every prompt and event verbatim, resume at a lower token count.",
+    "icon": "assets/logo.png",
     "author": {
         "name": "Shaya Shaviv",
         "url": "https://github.com/shayaShav"
