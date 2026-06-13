@@ -8,10 +8,12 @@
 
 <p align="left">
   <a href="https://www.npmjs.com/package/flatten-mcp"><img alt="npm version" src="https://img.shields.io/npm/v/flatten-mcp.svg"></a>
-  <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
-  <img alt="Node &gt;= 18" src="https://img.shields.io/badge/node-%3E%3D18-339933?logo=nodedotjs&amp;logoColor=white">
-  <img alt="Model Context Protocol" src="https://img.shields.io/badge/MCP-server-6E56CF.svg">
-  <img alt="Built for Claude Code" src="https://img.shields.io/badge/built%20for-Claude%20Code-D97757.svg">
+  <a href="https://www.npmjs.com/package/flatten-mcp"><img alt="npm downloads" src="https://img.shields.io/npm/dm/flatten-mcp.svg"></a>
+  <a href="https://github.com/shayaShav/flatten-mcp/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
+  <a href="https://nodejs.org"><img alt="Node &gt;= 18" src="https://img.shields.io/badge/node-%3E%3D18-339933?logo=nodedotjs&amp;logoColor=white"></a>
+  <a href="https://modelcontextprotocol.io"><img alt="Model Context Protocol" src="https://img.shields.io/badge/MCP-server-6E56CF.svg"></a>
+  <a href="https://docs.claude.com/en/docs/claude-code"><img alt="Built for Claude Code" src="https://img.shields.io/badge/built%20for-Claude%20Code-D97757.svg"></a>
+  <a href="https://smithery.ai/server/@shaya-shaviv/flatten-mcp"><img alt="Smithery calls" src="https://smithery.ai/badge/@shaya-shaviv/flatten-mcp"></a>
 </p>
 
 **flatten-mcp** is a [Model Context Protocol](https://modelcontextprotocol.io) server for [Claude Code](https://docs.claude.com/en/docs/claude-code). It shrinks a session's token footprint by moving bulky tool output (large file reads, command logs, base64 screenshots) out of the conversation and into a sidecar file — leaving a tiny, retrievable reference in its place. Your prompts and the chronological flow of the session are preserved **verbatim** — those lines are never rewritten. You resume the same raw conversation; it just costs less to carry.
