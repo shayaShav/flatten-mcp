@@ -17,10 +17,14 @@
     "license": "MIT",
     "keywords": [
         "mcp",
+        "model-context-protocol",
+        "claude",
         "claude-code",
         "context-window",
         "tokens",
         "session",
+        "history",
+        "flatten",
         "compaction"
     ],
     "server": {
