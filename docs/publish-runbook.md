@@ -71,13 +71,34 @@ curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.sha
 
 Expect `{"servers":[{ ... "name":"io.github.shayaShav/flatten-mcp" ... }]}`.
 
-## 5. Glama — claim the listing
+## 5. Glama — claim the listing and ship a Dockerfile (build + release)
 
-`glama.json` at the repo root with `"maintainers": ["shayaShav"]` is the claim mechanism
-(Glama blog, 2025-07-08; schema requires only `maintainers`). After pushing to `main`,
-check the listing at <https://glama.ai/mcp/servers> (search "flatten-mcp"). The blog does not
-document a manual re-index trigger; if the claim does not appear, the Claude-in-Chrome launch
-task covers contacting/submitting via Glama's site.
+Two layers, both required for the server to appear in Glama search results.
+
+**Claim.** `glama.json` at the repo root with `"maintainers": ["shayaShav"]` is the claim
+mechanism (Glama blog, 2025-07-08; schema requires only `maintainers`). There is **no separate
+"Claim" button**: sign in at <https://glama.ai> via GitHub OAuth as `shayaShav` (already-granted
+app → silent, no Authorize click), then open the listing — an **Admin** tab (Profile /
+Analytics / Repository / Dockerfile) appears automatically because the login matches
+`maintainers`. That admin access *is* the claimed/owner state. Live listing:
+<https://glama.ai/mcp/servers/shayaShav/flatten-mcp> (non-`@` path).
+
+**Dockerfile (verified 2026-06-15).** Glama does **not** accept a pasted Dockerfile — the admin
+**Dockerfile** tab (`.../admin/dockerfile`) is a config form that *generates* one and wraps the
+stdio server in `mcp-proxy`. The generated image clones the repo at the head commit and
+auto-detects the env-var schema (`ANTHROPIC_API_KEY`, `FLATTEN_COUNT_MODEL`). Only two fields
+need filling for this server:
+
+- **Build steps**: `["npm install", "npm run build"]`
+- **CMD arguments**: `["node", "dist/index.js"]` → generated `CMD ["mcp-proxy","--","node","dist/index.js"]`
+- **Placeholder parameters**: leave `{}` — the server boots with no credentials
+  (`ANTHROPIC_API_KEY` is optional). Base image `debian:trixie-slim`, Node 26 default — both fine.
+
+Then **Build** (runs a test build, boots the server, enumerates tools; ~40s) → on success
+**Create Release**. The release **Version** defaults to `1.0.0` — set it to match the npm version
+(shipped `1.0.3`). After release the Overview flips from "This server cannot be installed" to a
+live **Install Server** + **Try in Browser**; the `quality` score recomputes asynchronously.
+**Re-run Build + Create Release on every new version** so Glama rebuilds at the new commit.
 
 ## 6. Claude Code plugin — validate locally, then submit
 
@@ -131,6 +152,14 @@ Direct install channel (live immediately after push, no review — via this repo
   `manifest.json` declares `"icon": "assets/logo.png"` (a bundle-relative path per the MCPB
   spec), so when staging the bundle contents (dist/ + package files), copy `assets/logo.png`
   into the staging dir as well — otherwise the bundle ships a dangling icon reference.
+- **Pending for the next release (deferred 2026-06-15):** run `npm audit fix` to clear 7
+  transitive advisories (2 moderate, 5 high) under `@modelcontextprotocol/sdk` — all live in the
+  SDK's *optional* HTTP/SSE transport (Express + Hono), unreachable from this stdio server, so
+  deferred, not urgent. The fix is non-breaking (patch/minor bumps within existing ranges;
+  `--force` is unnecessary) and also resyncs the drifted `package-lock.json` (`version` is stuck
+  at `1.0.1` while `package.json` is `1.0.3`). After it: `npm run build` (expect zero errors) and
+  `npm audit` (expect 0). Caveat: this only cleans our repo/Docker build + committed lockfile —
+  a downstream `npm install flatten-mcp` still resolves transitive versions per the SDK's ranges.
 
 ## Plugin-channel tool names — RESOLVED (2026-06-13)
 
