@@ -5,16 +5,22 @@ import * as os from 'os';
 import * as readline from 'readline';
 import type { SessionMeta, SearchResult, ContentBlock } from './types.js';
 
-const CLAUDE_DIR = path.join(os.homedir(), '.claude', 'projects');
+// Base Claude config dir. Honors CLAUDE_CONFIG_DIR — the same env var Claude Code
+// itself uses to select a profile (e.g. ~/.claude-2) — so a server spawned inside
+// an alternate profile automatically targets that profile's session store instead
+// of the default ~/.claude. Callers can override per call via getSessionDir(..., claudeDir).
+function defaultClaudeDir(): string {
+    return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
 
-// Claude Code stores each project's sessions under ~/.claude/projects/<encoded>,
+// Claude Code stores each project's sessions under <claudeDir>/projects/<encoded>,
 // where <encoded> is the project's absolute path with every "/" turned into "-".
 function encodeProjectDir(absolutePath: string): string {
     return absolutePath.replace(/\//g, '-');
 }
 
-export function getSessionDir(projectDir: string): string {
-    return path.join(CLAUDE_DIR, encodeProjectDir(projectDir));
+export function getSessionDir(projectDir: string, claudeDir?: string): string {
+    return path.join(claudeDir || defaultClaudeDir(), 'projects', encodeProjectDir(projectDir));
 }
 
 async function streamJsonlLines(

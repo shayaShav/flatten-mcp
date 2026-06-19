@@ -127,8 +127,11 @@ Flatten artifacts (`.flat.jsonl` sidecars, `.bak` backups) live next to your ses
 
 By default the server operates on **the project the CLI runs in** (its current working directory). Pass `project_dir` explicitly on any call to target a different project.
 
+**Multiple Claude profiles.** Sessions are read from `$CLAUDE_CONFIG_DIR/projects/` when that env var is set, else `~/.claude/projects/`. Because Claude Code itself uses `CLAUDE_CONFIG_DIR` to pick a profile (e.g. a `claude-2` launcher that exports `CLAUDE_CONFIG_DIR=~/.claude-2`), a flatten-mcp server spawned inside an alternate profile **automatically** targets that profile's sessions. To reach another profile's sessions from a different one, pass `claude_dir` on any call — the absolute path (or `~/...`) to that profile's config dir, e.g. `claude_dir: "~/.claude-2"`.
+
 | Env var | Required | Purpose |
 | --- | --- | --- |
+| `CLAUDE_CONFIG_DIR` | no | Claude config dir whose `projects/` store is read. Defaults to `~/.claude`. Honors the same variable Claude Code uses for profile selection, so an alternate-profile session targets its own sessions with no extra config. Override per call with the `claude_dir` argument. |
 | `ANTHROPIC_API_KEY` | no | If set, token savings are counted **exactly** via Anthropic's free `count_tokens` endpoint instead of estimated locally. |
 | `FLATTEN_COUNT_MODEL` | no | Model id used for the exact token count (default: `claude-haiku-4-5-20251001`). |
 
@@ -192,7 +195,7 @@ See [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/do
 
 The entire server is four TypeScript files and two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [`zod`](https://www.npmjs.com/package/zod)) — it's a quick read.
 
-- **File access.** Every read and write is confined to Claude Code's session store, `~/.claude/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched.
+- **File access.** Every read and write is confined to Claude Code's session store, `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched.
 - **Network.** Zero network calls by default. When `ANTHROPIC_API_KEY` is set, exactly one endpoint is contacted: `POST https://api.anthropic.com/v1/messages/count_tokens` (free) to report exact token savings. The request body is the content being flattened — the same tool output and screenshots Anthropic already processed in the session — sent only to Anthropic for counting. The key is read from the environment, sent only as the auth header, and never stored or logged. There is no other URL in the codebase.
 - **No telemetry.** No analytics, no usage tracking, no phone-home.
 - **No shell execution, no hooks.** The server spawns no processes, executes no shell commands, installs no hooks, and does not need permission bypasses.
@@ -201,7 +204,7 @@ The entire server is four TypeScript files and two runtime dependencies ([`@mode
 
 ## Compatibility & roadmap
 
-- **Claude Code only, for now.** flatten-mcp reads Claude Code's session store at `~/.claude/projects/<encoded-project-dir>/*.jsonl`. It has been tested against Claude Code exclusively; the paths and the JSONL schema are specific to it and **will not work** for other agents or LLM CLIs as-is. Path handling is POSIX (macOS/Linux); Windows is untested.
+- **Claude Code only, for now.** flatten-mcp reads Claude Code's session store at `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/*.jsonl`. It has been tested against Claude Code exclusively; the paths and the JSONL schema are specific to it and **will not work** for other agents or LLM CLIs as-is. Path handling is POSIX (macOS/Linux); Windows is untested.
 - **Planned — a pluggable session backend.** Porting to other agents means abstracting the storage location and the on-disk message format behind a small adapter. Contributions welcome.
 
 ## Contributing
