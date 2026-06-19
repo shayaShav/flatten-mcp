@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import * as path from 'path';
+import * as os from 'os';
 import * as fs from 'fs/promises';
 
 import {
@@ -31,9 +32,24 @@ function resolveProjectDir(projectDir?: string): string {
     return projectDir || process.cwd();
 }
 
+function resolveClaudeDir(claudeDir?: string): string | undefined {
+    // undefined → session-store falls back to $CLAUDE_CONFIG_DIR or ~/.claude.
+    // Accepts the Claude config dir (the one holding projects/), e.g. ~/.claude-2,
+    // so a session in one profile can target another profile's session store.
+    if (!claudeDir) return undefined;
+    // Expand a leading "~/" for ergonomics, matching how profiles are named (~/.claude-2).
+    const dir = claudeDir === '~' || claudeDir.startsWith('~/')
+        ? path.join(os.homedir(), claudeDir.slice(1))
+        : claudeDir;
+    if (!path.isAbsolute(dir)) {
+        throw new Error(`claude_dir must be an absolute path (or start with ~/), got: ${claudeDir}`);
+    }
+    return dir;
+}
+
 const server = new McpServer({
     name: 'flatten-mcp',
-    version: '1.0.3',
+    version: '1.1.0',
 });
 
 // ─── Tool 1: list_sessions ──────────────────────────────────────────
@@ -43,12 +59,14 @@ server.tool(
     'List Claude Code sessions for a project with metadata (sessionId, branch, message count, file size, first user message).',
     {
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
+        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
         limit: z.number().optional().default(20).describe('Max sessions to return'),
         sort: z.enum(['newest', 'oldest', 'largest']).optional().default('newest'),
     },
-    async ({ project_dir, limit, sort }) => {
+    async ({ project_dir, claude_dir, limit, sort }) => {
         const projectDir = resolveProjectDir(project_dir);
-        const sessionDir = getSessionDir(projectDir);
+        const claudeDir = resolveClaudeDir(claude_dir);
+        const sessionDir = getSessionDir(projectDir, claudeDir);
         const sessions = await listSessionFiles(sessionDir);
 
         if (sort === 'newest') {
@@ -79,15 +97,17 @@ server.tool(
     'Search past sessions by keyword, date range, or git branch. Scans prose, tool I/O, and flatten sidecars; returns matching sessions with a match count and a text preview.',
     {
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
+        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
         query: z.string().optional().describe('Keyword to search in conversation text'),
         branch: z.string().optional().describe('Filter by git branch name'),
         date_from: z.string().optional().describe('ISO date lower bound'),
         date_to: z.string().optional().describe('ISO date upper bound'),
         limit: z.number().optional().default(10).describe('Max results to return'),
     },
-    async ({ project_dir, query, branch, date_from, date_to, limit }) => {
+    async ({ project_dir, claude_dir, query, branch, date_from, date_to, limit }) => {
         const projectDir = resolveProjectDir(project_dir);
-        const sessionDir = getSessionDir(projectDir);
+        const claudeDir = resolveClaudeDir(claude_dir);
+        const sessionDir = getSessionDir(projectDir, claudeDir);
         const results = await searchSessions(sessionDir, query, branch, date_from, date_to);
 
         return { content: [{ type: 'text' as const, text: JSON.stringify(results.slice(0, limit), null, 2) }] };
@@ -103,18 +123,20 @@ server.tool(
         session_id: z.string().optional().describe('Session UUID, "last", "last N", or "current" (most recent). Any other value is treated as a keyword matched against first messages and branch names, and may flatten MULTIPLE matching sessions — prefer a UUID here.'),
         sessionId: z.string().optional().describe('camelCase alias for session_id (the list_sessions output uses this name). Use session_id; this is accepted so a camelCase call does not fail validation.'),
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
+        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
         min_size: z.number().optional().default(1000).describe('Only flatten tool results larger than N bytes'),
         dry_run: z.boolean().optional().default(false).describe('Report what would be flattened without modifying files'),
         force: z.boolean().optional().default(false).describe('Flatten even if the session was modified seconds ago (may be live). Use only when the session is idle.'),
         include_tool_use_result: z.boolean().optional().default(true).describe('Also flatten the top-level toolUseResult mirror Claude Code keeps per result line (roughly doubles disk savings; lossless & restorable). Set false to only touch message.content.'),
     },
-    async ({ session_id, sessionId, project_dir, min_size, dry_run, force, include_tool_use_result }) => {
+    async ({ session_id, sessionId, project_dir, claude_dir, min_size, dry_run, force, include_tool_use_result }) => {
         const sessionIdInput = session_id ?? sessionId;
         if (!sessionIdInput) {
             return { content: [{ type: 'text' as const, text: 'session_id is required (UUID, "last", "last N", or "current").' }] };
         }
         const projectDir = resolveProjectDir(project_dir);
-        const sessionDir = getSessionDir(projectDir);
+        const claudeDir = resolveClaudeDir(claude_dir);
+        const sessionDir = getSessionDir(projectDir, claudeDir);
         const sessionIds = await resolveSessionId(sessionIdInput, sessionDir);
 
         if (sessionIds.length === 0) {
@@ -170,10 +192,12 @@ server.tool(
         tool_use_id: z.string().describe('Value after "id=" in the [FLATTENED id=XXX ...] marker'),
         session_id: z.string().describe('Value after "session=" in the [FLATTENED ... session=YYY ...] marker'),
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
+        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
     },
-    async ({ tool_use_id, session_id, project_dir }) => {
+    async ({ tool_use_id, session_id, project_dir, claude_dir }) => {
         const projectDir = resolveProjectDir(project_dir);
-        const sessionDir = getSessionDir(projectDir);
+        const claudeDir = resolveClaudeDir(claude_dir);
+        const sessionDir = getSessionDir(projectDir, claudeDir);
         const sidecarPath = path.join(sessionDir, `${session_id}.flat.jsonl`);
 
         try {
@@ -247,10 +271,12 @@ server.tool(
     {
         session_id: z.string().describe('Session UUID, "last", or "current" (most recent)'),
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
+        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
     },
-    async ({ session_id, project_dir }) => {
+    async ({ session_id, project_dir, claude_dir }) => {
         const projectDir = resolveProjectDir(project_dir);
-        const sessionDir = getSessionDir(projectDir);
+        const claudeDir = resolveClaudeDir(claude_dir);
+        const sessionDir = getSessionDir(projectDir, claudeDir);
         const sessionIds = await resolveSessionId(session_id, sessionDir);
 
         if (sessionIds.length === 0) {
@@ -286,13 +312,15 @@ server.tool(
     'Reclaim disk by deleting leftover flatten artifacts (.bak, .preunflatten.bak, and stale .tmp-<pid> files) for a project. By default keeps .flat.jsonl sidecars (retrieve_flattened needs them) and runs dry. Set include_sidecars=true only when you no longer need to retrieve/unflatten those sessions.',
     {
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
+        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
         older_than_days: z.number().optional().default(0).describe('Only delete artifacts whose mtime is older than N days. 0 = no age limit.'),
         include_sidecars: z.boolean().optional().default(false).describe('Also delete .flat.jsonl sidecars. WARNING: retrieve_flattened/unflatten_session stop working for those sessions.'),
         dry_run: z.boolean().optional().default(true).describe('Report what would be deleted without deleting. Default true for safety.'),
     },
-    async ({ project_dir, older_than_days, include_sidecars, dry_run }) => {
+    async ({ project_dir, claude_dir, older_than_days, include_sidecars, dry_run }) => {
         const projectDir = resolveProjectDir(project_dir);
-        const sessionDir = getSessionDir(projectDir);
+        const claudeDir = resolveClaudeDir(claude_dir);
+        const sessionDir = getSessionDir(projectDir, claudeDir);
 
         let entries: string[];
         try {
