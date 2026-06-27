@@ -181,6 +181,39 @@ When a session is flattened, the model sees compact markers like this in place o
 
 Everything the model needs to fetch the original — the id and the session — is right there in the marker.
 
+## Library API — flatten a raw Messages API conversation in-memory
+
+Calling the Anthropic Messages API (`POST /v1/messages`) directly, with no Claude
+Code and no session file? Import the flatten engine and run it on the
+`messages[]` array already in your process — no server, no HTTP, no MCP, no disk:
+
+```ts
+import { flattenMessages, unflattenMessages } from 'flatten-mcp';
+
+// Before sending the request:
+const { messages, extracted, flattenedCount, contextTokensSaved } = flattenMessages(myMessages);
+// → `messages` is a deep-copied, flattened body; send it to the API.
+// → persist `extracted` yourself — you are the store.
+
+// Later, to reconstruct the original conversation byte-for-byte:
+const original = unflattenMessages(messages, extracted);
+```
+
+Bulky `tool_result` blocks (large text output and base64 image/screenshot blocks)
+over `minSize` (default 1000 bytes) are swapped for a compact `[FLATTENED id=…]`
+marker; every other block is kept verbatim. Your input is **never mutated** —
+flattening deep-copies first.
+
+- `flattenMessages(messages, { minSize? })` → `{ messages, extracted, flattenedCount, imageBlocksFlattened, contextTokensSaved, contextTokensExact }`. Synchronous; `contextTokensSaved` is a local estimate and `contextTokensExact` is `false` (no network call).
+- `unflattenMessages(messages, extracted)` → restored `messages[]` (last entry wins per id; unmatched markers left in place).
+- **Whole request body?** `flattenRequestBody(body, { minSize? })` and `unflattenRequestBody(body, extracted)` take the full `{ system, messages, tools, … }` — only `messages` is transformed, every other field passes through untouched on a new object.
+- **Exact token counts** (optional, async): `flattenMessagesExact` / `flattenRequestBodyExact` report `contextTokensSaved` exactly via Anthropic's free `count_tokens` endpoint when `ANTHROPIC_API_KEY` is set (`contextTokensExact: true`), and fall back to the local estimate otherwise. Pass `{ countExact: false }` to force the estimate. This is the **only** code path that makes a network call.
+- **The caller is the store.** There is no sidecar — persist `extracted` and feed it back to restore.
+- **Prompt-caching caveat.** Flattening earlier messages changes the cached prefix and invalidates `cache_control` breakpoints from that point. Flatten **before** establishing a cache breakpoint.
+
+This is the *no-storage adapter* of the pluggable backend below; the disk MCP
+tools are the *Claude Code adapter* over the same block logic.
+
 ## How it works
 
 - **Sidecar, not deletion.** Each extracted block is written verbatim to `<session>.flat.jsonl` next to the session. The original session file is backed up **once** to `<session>.jsonl.bak` before the first rewrite.
@@ -193,7 +226,7 @@ See [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/do
 
 ## Security & disclosure
 
-The entire server is four TypeScript files and two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [`zod`](https://www.npmjs.com/package/zod)) — it's a quick read.
+The entire server is five small TypeScript files and two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [`zod`](https://www.npmjs.com/package/zod)) — it's a quick read. (The library export adds one more file, `src/lib.ts`, re-exporting the shared `src/core.ts`; it starts no server, and its only possible network call is the same opt-in `count_tokens` endpoint below — reached solely through the async `*Exact` functions when `ANTHROPIC_API_KEY` is set.)
 
 - **File access.** Every read and write is confined to Claude Code's session store, `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched.
 - **Network.** Zero network calls by default. When `ANTHROPIC_API_KEY` is set, exactly one endpoint is contacted: `POST https://api.anthropic.com/v1/messages/count_tokens` (free) to report exact token savings. The request body is the content being flattened — the same tool output and screenshots Anthropic already processed in the session — sent only to Anthropic for counting. The key is read from the environment, sent only as the auth header, and never stored or logged. There is no other URL in the codebase.
@@ -205,7 +238,8 @@ The entire server is four TypeScript files and two runtime dependencies ([`@mode
 ## Compatibility & roadmap
 
 - **Claude Code only, for now.** flatten-mcp reads Claude Code's session store at `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/*.jsonl`. It has been tested against Claude Code exclusively; the paths and the JSONL schema are specific to it and **will not work** for other agents or LLM CLIs as-is. Path handling is POSIX (macOS/Linux); Windows is untested.
-- **Planned — a pluggable session backend.** Porting to other agents means abstracting the storage location and the on-disk message format behind a small adapter. Contributions welcome.
+- **Shipped — a no-storage adapter.** The [Library API](#library-api--flatten-a-raw-messages-api-conversation-in-memory) (`flattenMessages` / `unflattenMessages`) flattens an in-memory `messages[]` array for raw Messages API callers, with no session file. It's the first adapter over the shared block logic.
+- **Planned — more session backends.** Porting to other agents means abstracting the storage location and the on-disk message format behind the same small adapter seam. Contributions welcome.
 
 ## Contributing
 
