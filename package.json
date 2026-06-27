@@ -4,7 +4,14 @@
     "mcpName": "io.github.shayaShav/flatten-mcp",
     "description": "An MCP server that flattens Claude Code sessions — keeping every prompt and event verbatim while reclaiming context tokens, so you resume the exact same raw conversation at a lower token count instead of compacting it into a lossy summary.",
     "type": "module",
-    "main": "dist/index.js",
+    "main": "dist/lib.js",
+    "types": "dist/lib.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/lib.d.ts",
+            "import": "./dist/lib.js"
+        }
+    },
     "bin": {
         "flatten-mcp": "dist/index.js"
     },
@@ -21,7 +28,8 @@
         "start": "node dist/index.js",
         "dev": "tsc --watch",
         "prepare": "tsc",
-        "prepublishOnly": "rm -rf dist && tsc"
+        "prepublishOnly": "rm -rf dist && tsc",
+        "test": "vitest run"
     },
     "keywords": [
         "mcp",
@@ -51,6 +59,7 @@
     },
     "devDependencies": {
         "@types/node": "^20.17.0",
-        "typescript": "^5.7.2"
+        "typescript": "^5.7.2",
+        "vitest": "^3.0.0"
     }
 }

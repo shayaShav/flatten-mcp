@@ -16,6 +16,9 @@ export interface SessionMessage {
 export interface ContentBlock {
     type: 'text' | 'tool_use' | 'tool_result' | 'image';
     text?: string;
+    // Assistant tool_use blocks carry their own `id` (the tool_use_id that the
+    // matching user tool_result later references). Distinct from tool_use_id.
+    id?: string;
     name?: string;
     input?: Record<string, unknown>;
     content?: string | ContentBlock[];

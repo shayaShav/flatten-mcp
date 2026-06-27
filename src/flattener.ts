@@ -2,8 +2,24 @@ import { createReadStream, constants as FS_CONSTANTS } from 'fs';
 import * as fs from 'fs/promises';
 import * as readline from 'readline';
 import type { SessionMessage, ContentBlock } from './types.js';
+// Shared core: the marker protocol, classification, and token estimation live in
+// core.ts as the single source of truth. This file is the Claude Code disk
+// adapter over that core. core.ts has no side effects (it never boots the
+// server), so importing it here is safe.
+import {
+    MARKER_PREFIX,
+    MARKER_ID_RE,
+    TEXT_BYTES_PER_TOKEN,
+    classifyContent,
+    valueByteSize,
+    estimateContentTokens,
+    toCountBlocks,
+    countTokensExact,
+    buildMarker,
+    type FlattenKind,
+} from './core.js';
 
-export type FlattenKind = 'text' | 'image' | 'mixed';
+export type { FlattenKind } from './core.js';
 // Where a flattened payload lived on the line:
 //   'content'        -> a tool_result block inside message.content (the API message)
 //   'toolUseResult'  -> the top-level toolUseResult mirror Claude Code keeps per line
@@ -62,21 +78,6 @@ export interface RetrieveResult {
     content: unknown;
 }
 
-/**
- * Raw tool_use block shape from the JSONL. Assistant tool_use blocks use
- * "id" (not "tool_use_id") in the actual Claude Code JSONL format.
- */
-interface RawToolUseBlock {
-    type: 'tool_use';
-    id: string;
-    name: string;
-    input: Record<string, unknown>;
-}
-
-/** Marker prefix used to tag a flattened payload, and matcher to read its id back. */
-const MARKER_PREFIX = '[FLATTENED id=';
-const MARKER_ID_RE = /^\[FLATTENED id=(\S+)\s/;
-
 /** Suffix distinguishing a flattened toolUseResult entry from its content sibling. */
 const TUR_ID_SUFFIX = '#tur';
 
@@ -111,84 +112,17 @@ export function buildToolNameMap(
         if (!Array.isArray(content)) continue;
 
         for (const block of content) {
-            // In raw JSONL, tool_use blocks have "id" field (not "tool_use_id")
-            const raw = block as unknown as RawToolUseBlock;
-            if (raw.type === 'tool_use' && raw.id && raw.name) {
-                map.set(raw.id, {
-                    name: raw.name,
-                    input: raw.input ?? {},
+            // In raw JSONL, tool_use blocks carry "id" (not "tool_use_id").
+            if (block.type === 'tool_use' && block.id && block.name) {
+                map.set(block.id, {
+                    name: block.name,
+                    input: block.input ?? {},
                 });
             }
         }
     }
 
     return map;
-}
-
-/**
- * Build a short summary of key arguments for the replacement marker.
- * E.g. Read { file_path: "/foo/bar.ts" } => "file_path=/foo/bar.ts"
- */
-function summarizeArgs(input: Record<string, unknown>): string {
-    const entries = Object.entries(input);
-    if (entries.length === 0) return '';
-
-    const keyArgs = ['file_path', 'command', 'pattern', 'query', 'url', 'path', 'description', 'prompt'];
-    const selected = entries
-        .filter(([k]) => keyArgs.includes(k))
-        .slice(0, 2);
-
-    if (selected.length === 0) {
-        selected.push(entries[0]);
-    }
-
-    return selected
-        .map(([k, v]) => {
-            const val = typeof v === 'string' ? v : JSON.stringify(v);
-            const truncated = val.length > 80 ? val.slice(0, 77) + '...' : val;
-            return `${k}=${truncated}`;
-        })
-        .join(', ');
-}
-
-/**
- * Classify a tool_result's content and project out its text. Handles three
- * real shapes seen in Claude Code JSONL:
- *   - string                         -> text
- *   - [{type:text}]                  -> text
- *   - [{type:image, source:{...}}]   -> image  (base64 screenshots — the bulk
- *                                       of session bloat by byte count)
- *   - [{type:text},{type:image}]     -> mixed
- */
-function classifyContent(content: string | ContentBlock[] | undefined): {
-    kind: FlattenKind | 'none';
-    text: string;
-    imageCount: number;
-} {
-    if (typeof content === 'string') {
-        return { kind: 'text', text: content, imageCount: 0 };
-    }
-    if (Array.isArray(content)) {
-        let text = '';
-        let imageCount = 0;
-        for (const b of content) {
-            if (b.type === 'text' && b.text) {
-                text += (text ? '\n' : '') + b.text;
-            } else if (b.type === 'image') {
-                imageCount++;
-            }
-        }
-        const hasText = text.length > 0;
-        const hasImage = imageCount > 0;
-        // A non-empty array with no text/image block (e.g. tool_reference blocks)
-        // is still classified 'text' so it gets flattened and stored verbatim,
-        // rather than silently skipped — keeps flatten lossless for any block type.
-        const hasOther = content.length > 0;
-        const kind: FlattenKind | 'none' =
-            hasImage && hasText ? 'mixed' : hasImage ? 'image' : hasText ? 'text' : hasOther ? 'text' : 'none';
-        return { kind, text, imageCount };
-    }
-    return { kind: 'none', text: '', imageCount: 0 };
 }
 
 /** Detect an image-bearing toolUseResult (its mirror of a screenshot). */
@@ -204,125 +138,21 @@ function toolUseResultIsImage(tur: unknown): boolean {
     return false;
 }
 
-/** Byte size of any value exactly as it would sit inside the JSONL line. */
-function valueByteSize(v: unknown): number {
-    return typeof v === 'string'
-        ? Buffer.byteLength(v, 'utf-8')
-        : Buffer.byteLength(JSON.stringify(v), 'utf-8');
-}
-
 // ─── Context-token measurement ──────────────────────────────────────
 // Why this exists: the disk byte-savings reported by flatten is a poor proxy
 // for tokens removed from the model's context. ~half of a session file is
 // metadata/mirror the model never sees, and images cost ~38 B/token vs ~3.5
 // B/token for text — so bytes and tokens decouple. These helpers report the
-// CONTEXT-token number instead, exact when an API key is present.
-
-const TEXT_BYTES_PER_TOKEN = 3.5;   // Claude tokenizer ≈ 3.3–3.7 B/tok for English/code
-const IMAGE_TOKEN_EST = 1500;       // typical screenshot tile cost; exact via count_tokens when keyed
-
-/** Estimate the context-token cost of a flattened content value (text + images). */
-function estimateContentTokens(content: unknown): { tokens: number; images: number } {
-    if (typeof content === 'string') {
-        return { tokens: Math.ceil(Buffer.byteLength(content, 'utf-8') / TEXT_BYTES_PER_TOKEN), images: 0 };
-    }
-    if (Array.isArray(content)) {
-        let tokens = 0;
-        let images = 0;
-        for (const b of content as ContentBlock[]) {
-            if (b.type === 'image') { tokens += IMAGE_TOKEN_EST; images++; }
-            else if (b.type === 'text' && b.text) tokens += Math.ceil(Buffer.byteLength(b.text, 'utf-8') / TEXT_BYTES_PER_TOKEN);
-            else tokens += Math.ceil(Buffer.byteLength(JSON.stringify(b), 'utf-8') / TEXT_BYTES_PER_TOKEN);
-        }
-        return { tokens, images };
-    }
-    if (content && typeof content === 'object') {
-        return { tokens: Math.ceil(Buffer.byteLength(JSON.stringify(content), 'utf-8') / TEXT_BYTES_PER_TOKEN), images: 0 };
-    }
-    return { tokens: 0, images: 0 };
-}
-
-/** Flatten removed content values into Anthropic message blocks for count_tokens. */
-function toCountBlocks(values: unknown[]): Array<Record<string, unknown>> {
-    const blocks: Array<Record<string, unknown>> = [];
-    for (const c of values) {
-        if (typeof c === 'string') {
-            if (c) blocks.push({ type: 'text', text: c });
-        } else if (Array.isArray(c)) {
-            for (const b of c as ContentBlock[]) {
-                if (b.type === 'image' && b.source?.data) {
-                    blocks.push({ type: 'image', source: { type: b.source.type || 'base64', media_type: b.source.media_type || 'image/png', data: b.source.data } });
-                } else if (b.type === 'text' && b.text) {
-                    blocks.push({ type: 'text', text: b.text });
-                } else {
-                    blocks.push({ type: 'text', text: JSON.stringify(b) });
-                }
-            }
-        } else if (c && typeof c === 'object') {
-            blocks.push({ type: 'text', text: JSON.stringify(c) });
-        }
-    }
-    return blocks;
-}
-
-/**
- * Exact token count via Anthropic's free count_tokens endpoint. Returns null
- * when no ANTHROPIC_API_KEY is set or the call fails — caller falls back to the
- * local estimate. Uses global fetch (Node 18+); no SDK dependency added.
- */
-async function countTokensExact(blocks: Array<Record<string, unknown>>): Promise<number | null> {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey || blocks.length === 0) return null;
-    try {
-        const res = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
-            method: 'POST',
-            headers: {
-                'x-api-key': apiKey,
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: process.env.FLATTEN_COUNT_MODEL || 'claude-haiku-4-5-20251001',
-                messages: [{ role: 'user', content: blocks }],
-            }),
-        });
-        if (!res.ok) return null;
-        const data = (await res.json()) as { input_tokens?: number };
-        return typeof data.input_tokens === 'number' ? data.input_tokens : null;
-    } catch {
-        return null;
-    }
-}
+// CONTEXT-token number instead, exact when an API key is present. The estimator,
+// the count_tokens helpers (toCountBlocks/countTokensExact), and the constants
+// all live in core.ts now; only usageContextTokens below is disk-specific (it
+// reads the per-turn API usage that exists only in the session JSONL).
 
 /** Total tokens of an assistant turn's API usage = the real context size at that point. */
 function usageContextTokens(usage: unknown): number {
     if (!usage || typeof usage !== 'object') return 0;
     const u = usage as Record<string, number>;
     return (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-}
-
-/**
- * Build the compact replacement marker. Each identifier (id, session) appears
- * exactly ONCE; the retrieval protocol lives in the retrieve_flattened tool
- * description rather than being repeated verbatim in every marker.
- */
-function buildMarker(args: {
-    id: string;
-    name: string;
-    input: Record<string, unknown>;
-    kind: FlattenKind;
-    size: number;
-    lineCount: number;
-    sessionId: string;
-}): string {
-    const { id, name, input, kind, size, lineCount, sessionId } = args;
-    const argSummary = summarizeArgs(input);
-    const argsPart = argSummary ? ` ${argSummary}` : '';
-    const kindLabel = kind === 'image' ? 'image' : kind === 'mixed' ? 'text+image' : 'text';
-    const restore = (kind === 'image' || kind === 'mixed')
-        ? 'retrieve_flattened(id,session) to re-view image'
-        : 'retrieve_flattened(id,session) for raw content';
-    return `${MARKER_PREFIX}${id} tool=${name}${argsPart} | ${kindLabel} ${size}B/${lineCount}L | session=${sessionId} | ${restore}]`;
 }
 
 /**
