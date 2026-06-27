@@ -8,9 +8,7 @@ import * as fs from 'fs/promises';
 
 import {
     getSessionDir,
-    listSessionFiles,
     resolveSessionId,
-    searchSessions,
 } from './session-store.js';
 
 import {
@@ -52,88 +50,24 @@ const server = new McpServer({
     version: '1.1.0',
 });
 
-// ─── Tool 1: list_sessions ──────────────────────────────────────────
-
-server.tool(
-    'list_sessions',
-    'List Claude Code sessions for a project with metadata (sessionId, branch, message count, file size, first user message).',
-    {
-        project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
-        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
-        limit: z.number().optional().default(20).describe('Max sessions to return'),
-        sort: z.enum(['newest', 'oldest', 'largest']).optional().default('newest'),
-    },
-    async ({ project_dir, claude_dir, limit, sort }) => {
-        const projectDir = resolveProjectDir(project_dir);
-        const claudeDir = resolveClaudeDir(claude_dir);
-        const sessionDir = getSessionDir(projectDir, claudeDir);
-        const sessions = await listSessionFiles(sessionDir);
-
-        if (sort === 'newest') {
-            sessions.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        } else if (sort === 'oldest') {
-            sessions.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-        } else if (sort === 'largest') {
-            sessions.sort((a, b) => b.fileSize - a.fileSize);
-        }
-
-        const page = sessions.slice(0, limit).map(s => ({
-            sessionId: s.sessionId,
-            timestamp: s.timestamp,
-            gitBranch: s.gitBranch,
-            messageCount: s.messageCount,
-            fileSize: s.fileSize,
-            firstUserMessage: s.firstUserMessage,
-        }));
-
-        return { content: [{ type: 'text' as const, text: JSON.stringify(page, null, 2) }] };
-    }
-);
-
-// ─── Tool 2: search_sessions ────────────────────────────────────────
-
-server.tool(
-    'search_sessions',
-    'Search past sessions by keyword, date range, or git branch. Scans prose, tool I/O, and flatten sidecars; returns matching sessions with a match count and a text preview.',
-    {
-        project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
-        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
-        query: z.string().optional().describe('Keyword to search in conversation text'),
-        branch: z.string().optional().describe('Filter by git branch name'),
-        date_from: z.string().optional().describe('ISO date lower bound'),
-        date_to: z.string().optional().describe('ISO date upper bound'),
-        limit: z.number().optional().default(10).describe('Max results to return'),
-    },
-    async ({ project_dir, claude_dir, query, branch, date_from, date_to, limit }) => {
-        const projectDir = resolveProjectDir(project_dir);
-        const claudeDir = resolveClaudeDir(claude_dir);
-        const sessionDir = getSessionDir(projectDir, claudeDir);
-        const results = await searchSessions(sessionDir, query, branch, date_from, date_to);
-
-        return { content: [{ type: 'text' as const, text: JSON.stringify(results.slice(0, limit), null, 2) }] };
-    }
-);
-
-// ─── Tool 3: flatten_session ────────────────────────────────────────
+// ─── Tool 1: flatten_session ────────────────────────────────────────
 
 server.tool(
     'flatten_session',
-    'Flatten a session: move bulky tool results (large text output and base64 image/screenshot blocks) out of the session JSONL into a sidecar file, leaving a lightweight [FLATTENED ...] marker in their place. The conversation reads identically — every prompt and event stays verbatim — but resumes with far fewer context tokens. Crash-safe (atomic rewrite + idempotent sidecar) and fully reversible via unflatten_session. Reports diskBytesSaved (file shrink, affects --resume parse speed) and contextTokensSaved out of contextTokensTotal (the number that matters for compaction); token savings are estimated locally, or exact when ANTHROPIC_API_KEY is set. Accepts a UUID, "last", "last N", or "current". Refuses to rewrite a session edited in the last 10s (likely live) unless force=true.',
+    'Flatten a Claude Code session: move bulky tool results (large text output and base64 image/screenshot blocks) out of the session JSONL into a sidecar, leaving a compact [FLATTENED ...] marker. The conversation reads identically — every prompt and event stays verbatim — but resumes with far fewer context tokens. Crash-safe (atomic rewrite + one-time backup) and reversible via unflatten_session. Reports diskBytesSaved and contextTokensSaved out of contextTokensTotal (estimated locally, or exact when ANTHROPIC_API_KEY is set). With no session_id, flattens the current live session; also accepts a UUID, "last", "last N", or "current". After flattening, /resume the session to load the lighter copy.',
     {
-        session_id: z.string().optional().describe('Session UUID, "last", "last N", or "current" (most recent). Any other value is treated as a keyword matched against first messages and branch names, and may flatten MULTIPLE matching sessions — prefer a UUID here.'),
-        sessionId: z.string().optional().describe('camelCase alias for session_id (the list_sessions output uses this name). Use session_id; this is accepted so a camelCase call does not fail validation.'),
+        session_id: z.string().optional().describe('Session UUID, "last", "last N", or "current". Omit to flatten the current live session.'),
+        sessionId: z.string().optional().describe('camelCase alias for session_id (accepted so a camelCase call does not fail validation).'),
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
-        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
+        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/. Default: $CLAUDE_CONFIG_DIR if set, else ~/.claude.'),
         min_size: z.number().optional().default(1000).describe('Only flatten tool results larger than N bytes'),
         dry_run: z.boolean().optional().default(false).describe('Report what would be flattened without modifying files'),
-        force: z.boolean().optional().default(false).describe('Flatten even if the session was modified seconds ago (may be live). Use only when the session is idle.'),
         include_tool_use_result: z.boolean().optional().default(true).describe('Also flatten the top-level toolUseResult mirror Claude Code keeps per result line (roughly doubles disk savings; lossless & restorable). Set false to only touch message.content.'),
     },
-    async ({ session_id, sessionId, project_dir, claude_dir, min_size, dry_run, force, include_tool_use_result }) => {
-        const sessionIdInput = session_id ?? sessionId;
-        if (!sessionIdInput) {
-            return { content: [{ type: 'text' as const, text: 'session_id is required (UUID, "last", "last N", or "current").' }] };
-        }
+    async ({ session_id, sessionId, project_dir, claude_dir, min_size, dry_run, include_tool_use_result }) => {
+        // No session_id → "current", which resolveSessionId maps to the live
+        // session via CLAUDE_CODE_SESSION_ID (set by Claude Code in this server's env).
+        const sessionIdInput = session_id ?? sessionId ?? 'current';
         const projectDir = resolveProjectDir(project_dir);
         const claudeDir = resolveClaudeDir(claude_dir);
         const sessionDir = getSessionDir(projectDir, claudeDir);
@@ -146,11 +80,10 @@ server.tool(
         const results = [];
         for (const sid of sessionIds) {
             const filePath = path.join(sessionDir, `${sid}.jsonl`);
-            const result = await flattenSession(filePath, min_size, dry_run, force, include_tool_use_result);
+            const result = await flattenSession(filePath, min_size, dry_run, include_tool_use_result);
             results.push({
                 sessionId: sid,
                 dryRun: dry_run,
-                skipped: result.skipped,
                 flattenedCount: result.flattenedCount,
                 imageBlocksFlattened: result.imageBlocksFlattened,
                 // DISK shrink — relevant to --resume parse speed.
@@ -171,6 +104,12 @@ server.tool(
                 sidecarPath: result.sidecarPath,
                 backupPath: result.backupPath,
                 entries: result.entries,
+                // The live-write reminder: a flattened session only takes effect once
+                // Claude Code reloads it from disk. Surface this whenever we actually
+                // rewrote a session (not a dry run, and something was flattened).
+                resumeHint: (!dry_run && result.flattenedCount > 0)
+                    ? 'Flattened in place. Now /resume this session (switch to another session and back) to load the lighter copy — until you do, this window still holds the full version.'
+                    : undefined,
             });
         }
 
@@ -183,7 +122,7 @@ server.tool(
     }
 );
 
-// ─── Tool 4: retrieve_flattened ─────────────────────────────────────
+// ─── Tool 2: retrieve_flattened ─────────────────────────────────────
 
 server.tool(
     'retrieve_flattened',
@@ -263,13 +202,13 @@ server.tool(
     }
 );
 
-// ─── Tool 5: unflatten_session ──────────────────────────────────────
+// ─── Tool 3: unflatten_session ──────────────────────────────────────
 
 server.tool(
     'unflatten_session',
     'Reverse a flatten: re-inline every flattened tool result (text and images) back into the session JSONL from its sidecar, restoring the session to its pre-flatten state. Snapshots the flattened file to <file>.preunflatten.bak first.',
     {
-        session_id: z.string().describe('Session UUID, "last", or "current" (most recent)'),
+        session_id: z.string().describe('Session UUID, "last", or "current" (the live session)'),
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
         claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
     },
@@ -305,7 +244,7 @@ server.tool(
     }
 );
 
-// ─── Tool 6: prune_flatten_artifacts ────────────────────────────────
+// ─── Tool 4: prune_flatten_artifacts ────────────────────────────────
 
 server.tool(
     'prune_flatten_artifacts',

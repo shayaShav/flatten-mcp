@@ -6,9 +6,9 @@ This document describes the on-disk formats flatten-mcp operates on and the algo
 
 ```
 src/
-  index.ts          MCP server — registers the 6 tools, validates input, formats output
+  index.ts          MCP server — registers the 4 tools, validates input, formats output
   flattener.ts      flatten / unflatten / retrieve engine — the JSONL surgery
-  session-store.ts  session discovery, id resolution, and keyword search
+  session-store.ts  session discovery and id resolution
   types.ts          shared interfaces for the session JSONL shape
 ```
 
@@ -81,10 +81,9 @@ The id and session id each appear **once**; the retrieval instructions live in t
 
 1. Read the whole session file; split into lines.
 2. Build the `tool_use_id → {name,input}` map from assistant lines.
-3. **Live-write guard:** unless `dry_run` or `force`, refuse if the file's mtime is younger than 10 s (likely an active session).
-4. For each `user` line, for every `tool_result` block larger than `min_size`: stash the original as a sidecar entry, swap in a marker. Repeat for the `toolUseResult` mirror when enabled.
-5. Track context tokens from the latest assistant turn's `message.usage` (`input + cache_read + cache_creation`) as the real context total; estimate tokens removed locally, or upgrade to an exact `count_tokens` result when `ANTHROPIC_API_KEY` is set.
-6. **Write order is chosen for crash-safety** (see below).
+3. For each `user` line, for every `tool_result` block larger than `min_size`: stash the original as a sidecar entry, swap in a marker. Repeat for the `toolUseResult` mirror when enabled.
+4. Track context tokens from the latest assistant turn's `message.usage` (`input + cache_read + cache_creation`) as the real context total; estimate tokens removed locally, or upgrade to an exact `count_tokens` result when `ANTHROPIC_API_KEY` is set.
+5. **Write order is chosen for crash-safety** (see below).
 
 ### Crash-safety
 
@@ -104,7 +103,6 @@ Builds an `id → original` map from the sidecar (last entry wins), then walks t
 | --- | --- | --- |
 | `TEXT_BYTES_PER_TOKEN` | 3.5 | Claude tokenizer ≈ 3.3–3.7 B/token for English/code. |
 | `IMAGE_TOKEN_EST` | 1500 | Typical screenshot tile cost; exact via `count_tokens` when keyed. |
-| `ACTIVE_SESSION_THRESHOLD_MS` | 10000 | Live-write guard window. |
 
 Only `slot: "content"` removals reduce what the model sees, so only they count toward `contextTokensSaved`. The `toolUseResult` mirror contributes to `diskBytesSaved` only.
 

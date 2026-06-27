@@ -37,12 +37,3 @@ export interface SessionMeta {
     firstUserMessage: string;
     filePath: string;
 }
-
-export interface SearchResult {
-    sessionId: string;
-    timestamp: string;
-    gitBranch: string;
-    matchCount: number;
-    matchPreview: string;
-    fileSize: number;
-}

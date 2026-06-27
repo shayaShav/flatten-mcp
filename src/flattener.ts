@@ -54,7 +54,6 @@ export interface FlattenResult {
     imageBlocksFlattened: number;       // images removed (huge disk win, small token win)
     sidecarPath: string;
     backupPath: string;
-    skipped?: string;
     entries: Array<{ id: string; name: string; size: number; kind: FlattenKind; slot: FlattenSlot }>;
 }
 
@@ -80,13 +79,6 @@ export interface RetrieveResult {
 
 /** Suffix distinguishing a flattened toolUseResult entry from its content sibling. */
 const TUR_ID_SUFFIX = '#tur';
-
-/**
- * A session file modified more recently than this is assumed to be live (Claude
- * Code is still appending to it). Rewriting it in place risks racing concurrent
- * writes, so we refuse unless force=true. Read-only dry runs are always allowed.
- */
-const ACTIVE_SESSION_THRESHOLD_MS = 10_000;
 
 /**
  * Scan assistant messages for tool_use blocks and build a map from
@@ -227,7 +219,6 @@ function emptyResult(
     originalSize: number,
     sidecarPath: string,
     backupPath: string,
-    skipped?: string,
     contextTokensTotal: number | null = null
 ): FlattenResult {
     return {
@@ -242,7 +233,6 @@ function emptyResult(
         imageBlocksFlattened: 0,
         sidecarPath,
         backupPath,
-        skipped,
         entries: [],
     };
 }
@@ -259,7 +249,6 @@ export async function flattenSession(
     filePath: string,
     minSize: number,
     dryRun: boolean,
-    force = false,
     flattenToolUseResult = true
 ): Promise<FlattenResult> {
     const sessionDir = filePath.replace(/\/[^/]+$/, '');
@@ -282,23 +271,6 @@ export async function flattenSession(
             }
         } catch {
             continue;
-        }
-    }
-
-    // Live-session guard: refuse to rewrite a file that is likely being written
-    // to right now (e.g. the caller's own current session). Dry runs are safe.
-    if (!dryRun && !force) {
-        const stat = await fs.stat(filePath);
-        const ageMs = Date.now() - stat.mtimeMs;
-        if (ageMs < ACTIVE_SESSION_THRESHOLD_MS) {
-            return emptyResult(
-                sessionId,
-                originalSize,
-                sidecarPath,
-                backupPath,
-                `Session was modified ${Math.round(ageMs / 1000)}s ago and may be active (Claude Code still appending). ` +
-                `Rewriting it could race concurrent writes. Re-run with force=true once the session is idle, or flatten a different session.`
-            );
         }
     }
 
@@ -408,7 +380,7 @@ export async function flattenSession(
     }
 
     if (sidecarEntries.length === 0) {
-        return emptyResult(sessionId, originalSize, sidecarPath, backupPath, undefined, contextTokensTotal);
+        return emptyResult(sessionId, originalSize, sidecarPath, backupPath, contextTokensTotal);
     }
 
     const newContent = modifiedLines.join('\n') + '\n';

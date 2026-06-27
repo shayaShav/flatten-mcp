@@ -13,7 +13,8 @@
         }
     },
     "bin": {
-        "flatten-mcp": "dist/index.js"
+        "flatten-mcp": "dist/index.js",
+        "flatten-mcp-cli": "dist/cli.js"
     },
     "files": [
         "dist",
