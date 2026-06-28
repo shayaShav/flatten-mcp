@@ -6,3 +6,12 @@ dist/
 .DS_Store
 .vscode/
 .playwright-mcp/
+
+# Local-only AI context — not public
+/CLAUDE.md
+
+# Interim / internal / operator docs — never tracked
+/.dev/
+
+# Stray scratch images at repo root (real assets live in assets/)
+/*.png

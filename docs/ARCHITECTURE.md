@@ -6,9 +6,9 @@ This document describes the on-disk formats flatten-mcp operates on and the algo
 
 ```
 src/
-  index.ts          MCP server — registers the 6 tools, validates input, formats output
+  index.ts          MCP server — registers the 3 tools, validates input, formats output
   flattener.ts      flatten / unflatten / retrieve engine — the JSONL surgery
-  session-store.ts  session discovery, id resolution, and keyword search
+  session-store.ts  session discovery and id resolution
   types.ts          shared interfaces for the session JSONL shape
 ```
 
@@ -47,25 +47,21 @@ Because `tool_result` blocks only carry `tool_use_id`, flatten first scans every
 
 Each result line also carries a **top-level `toolUseResult`** field that duplicates the tool output outside the API `message`. Only the copy inside `message.content` is sent to the model; the mirror is disk-only. flatten can extract both — controlled by `include_tool_use_result` — which is why **disk** savings and **context-token** savings diverge.
 
-## Sidecar format
+## Backup model
 
-Extracted payloads are appended to `<session>.flat.jsonl`, one JSON object per line:
+flatten keeps a single side artifact: `<session>.jsonl.bak`. It is **the complete session, fully inlined** — the same line-delimited JSON format as the session file itself, with every flattened block in place (the originals, verbatim). There is no separate keyed store; the backup is just "the session as if you'd never flattened".
 
-```jsonc
-{
-  "id": "toolu_01AbC…",      // tool_use_id, or "<tool_use_id>#tur" for a mirror entry
-  "slot": "content",          // "content" (API message) | "toolUseResult" (disk mirror)
-  "name": "Read",
-  "input": { "file_path": "…" },
-  "content": "…",            // the ORIGINAL value, verbatim: string | block[] | object
-  "size": 48213,
-  "lineCount": 612,
-  "timestamp": "…",
-  "kind": "text"             // "text" | "image" | "mixed"
-}
-```
+One invariant ties the two files together, re-established on every flatten:
 
-`content` is stored exactly as it appeared in the session, so unflatten restores each block to its original value (byte-identical for Claude Code's canonical JSON) — including mixed text+image results and raw mirror objects. Untouched lines, including your prompts, are copied through verbatim and never re-serialized.
+- `backup = unflatten(live)` — the complete originals
+- `live   = flatten(backup)` — the lightweight markers
+
+Two helpers do the work in both directions:
+
+- `harvestOriginals(lines)` reads a session's lines into an `id → original` map, keyed exactly as the markers reference them: content blocks by `tool_use_id`, `toolUseResult` mirrors by `<tool_use_id>#tur`.
+- `inlineLines(lines, originals)` is the shared pass that replaces every resolvable marker with its original (both slots), leaving unmatched lines verbatim.
+
+Originals are stored exactly as they appeared, so restore is byte-identical for Claude Code's canonical JSON — including mixed text+image results and raw mirror objects. Untouched lines, including your prompts, are copied through verbatim.
 
 ## Marker protocol
 
@@ -81,22 +77,21 @@ The id and session id each appear **once**; the retrieval instructions live in t
 
 1. Read the whole session file; split into lines.
 2. Build the `tool_use_id → {name,input}` map from assistant lines.
-3. **Live-write guard:** unless `dry_run` or `force`, refuse if the file's mtime is younger than 10 s (likely an active session).
-4. For each `user` line, for every `tool_result` block larger than `min_size`: stash the original as a sidecar entry, swap in a marker. Repeat for the `toolUseResult` mirror when enabled.
-5. Track context tokens from the latest assistant turn's `message.usage` (`input + cache_read + cache_creation`) as the real context total; estimate tokens removed locally, or upgrade to an exact `count_tokens` result when `ANTHROPIC_API_KEY` is set.
+3. For each `user` line, for every `tool_result` block larger than `min_size`: record the original, swap in a marker. Repeat for the `toolUseResult` mirror when enabled. Lines already carrying a marker are skipped, so a re-run only touches newly-arrived bulk and the reported metrics stay per-operation.
+4. Track context tokens from the latest assistant turn's `message.usage` (`input + cache_read + cache_creation`) as the real context total; estimate tokens removed locally, or upgrade to an exact `count_tokens` result when `ANTHROPIC_API_KEY` is set.
+5. Rebuild the backup as the complete inlined session — `inlineLines` resolves the markers already in the live file against the prior backup; bulk added since the last flatten is still inline and passes through. On the first flatten the backup is the verbatim pristine original.
 6. **Write order is chosen for crash-safety** (see below).
 
 ### Crash-safety
 
 The session file is irreplaceable, so writes are ordered so any interruption leaves it intact:
 
-1. Append originals to the sidecar **first** (deduped against ids already present, so a re-run after a crash can't double-append).
-2. Back up the original session **once** with `COPYFILE_EXCL` — an existing `.bak` is never overwritten with an already-flattened copy.
-3. Rewrite the session via a sibling temp file + atomic `rename(2)`. On the same filesystem the session is therefore always *fully* the old version or *fully* the new one — never truncated.
+1. Write the **complete backup first** (sibling temp file + atomic `rename(2)`). It holds every original — old and new — so it is the safety net.
+2. Rewrite the live session **second**, the same atomic way. A crash between the two leaves the live file's markers fully resolvable against the backup; on the same filesystem each file is always *fully* the old version or *fully* the new one — never truncated.
 
 ## Unflatten
 
-Builds an `id → original` map from the sidecar (last entry wins), then walks the session re-inlining every `tool_result` block and `toolUseResult` mirror whose marker id is found. Snapshots the flattened file to `<session>.preunflatten.bak` before writing, and uses the same atomic rewrite. Ids present in the session but missing from the sidecar are reported in `notFound`.
+Builds an `id → original` map from the backup (`harvestOriginals`), then re-inlines the live session with `inlineLines` — restoring every `tool_result` block and `toolUseResult` mirror whose marker id is found, via the same atomic rewrite. Re-inlining (rather than copying the backup over the live file) preserves any content appended *after* the last flatten. Ids present in the session but missing from the backup are reported in `notFound`; once every marker resolves cleanly, the backup is **deleted**, so a fully restored session leaves zero artifacts.
 
 ## Token accounting
 
@@ -104,7 +99,6 @@ Builds an `id → original` map from the sidecar (last entry wins), then walks t
 | --- | --- | --- |
 | `TEXT_BYTES_PER_TOKEN` | 3.5 | Claude tokenizer ≈ 3.3–3.7 B/token for English/code. |
 | `IMAGE_TOKEN_EST` | 1500 | Typical screenshot tile cost; exact via `count_tokens` when keyed. |
-| `ACTIVE_SESSION_THRESHOLD_MS` | 10000 | Live-write guard window. |
 
 Only `slot: "content"` removals reduce what the model sees, so only they count toward `contextTokensSaved`. The `toolUseResult` mirror contributes to `diskBytesSaved` only.
 
@@ -112,9 +106,7 @@ Only `slot: "content"` removals reduce what the model sees, so only they count t
 
 | File | Created by | Purpose |
 | --- | --- | --- |
-| `<session>.flat.jsonl` | flatten | Sidecar holding original payloads. Needed by retrieve / unflatten. |
-| `<session>.jsonl.bak` | flatten | One-time backup of the pre-flatten session. |
-| `<session>.preunflatten.bak` | unflatten | Snapshot of the flattened session before restore. |
+| `<session>.jsonl.bak` | flatten | The single backup: the complete session, fully inlined. Needed by retrieve / unflatten; rebuilt each flatten; **deleted** by a clean unflatten. |
 | `<session>.jsonl.tmp-<pid>` | atomic write | Transient; renamed into place. A leftover means a crash mid-write. |
 
-`prune_flatten_artifacts` cleans the `.bak` / `.tmp` files (and, opt-in, sidecars).
+A flattened session leaves exactly one extra file (`.jsonl.bak`); a fully unflattened session leaves none. The model is self-cleaning — there is no separate prune step.

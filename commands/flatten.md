@@ -1,13 +1,13 @@
 ---
-description: Flatten a Claude Code session via *flatten-mcp* ONLY (not via bash). Move bulky tool output to a sidecar, keep silent and only give back summarized flattening stats.
-argument-hint: [<session-uuid> | latest]
-allowed-tools: mcp__flatten__flatten_session, mcp__flatten__list_sessions, mcp__plugin_flatten-mcp_flatten__flatten_session, mcp__plugin_flatten-mcp_flatten__list_sessions
+description: Flatten the current (or a specified) Claude Code session via *flatten-mcp* ONLY (not via bash). Move bulky tool output to a sidecar; report the summarized flattening stats and the /resume reminder.
+argument-hint: [<session-uuid>]
+allowed-tools: mcp__flatten__flatten_session, mcp__plugin_flatten-mcp_flatten__flatten_session
 ---
 
-Flatten a Claude Code session using the **flatten** MCP server. Target: "$ARGUMENTS" (empty or "latest" = most recent flattenable session).
+Flatten a Claude Code session using the **flatten** MCP server. Target: "$ARGUMENTS" (empty = the current live session).
 
 Rules:
-1. A session UUID → call `flatten_session` with it directly.
-2. "latest" or empty → call `list_sessions` (sort: newest, limit: 2) and flatten the **larger** of the two most recent sessions, by UUID. The smaller, seconds-old one is almost always this very window — the session worth flattening is the big one.
-3. NEVER pass `force: true`. A guard refusal means the session is in use; report it, don't override it.
-4. Report `flattenedCount`, `contextTokensSaved` of `contextTokensTotal` (with %), and `diskBytesSaved`.
+1. No argument → call `flatten_session` with no `session_id`. The server flattens the current live session, which it identifies from `CLAUDE_CODE_SESSION_ID` in its own environment.
+2. A session UUID → call `flatten_session` with that value as `session_id`.
+3. Use the MCP tool only — never flatten via bash.
+4. Report `flattenedCount`, `contextTokensSaved` of `contextTokensTotal` (with %), and `diskBytesSaved`. Then surface the result's `resumeHint` verbatim: the user must **`/resume`** this session (switch to another session and back) for the flattened, lighter copy to load.

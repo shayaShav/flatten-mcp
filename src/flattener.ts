@@ -1,4 +1,4 @@
-import { createReadStream, constants as FS_CONSTANTS } from 'fs';
+import { createReadStream } from 'fs';
 import * as fs from 'fs/promises';
 import * as readline from 'readline';
 import type { SessionMessage, ContentBlock } from './types.js';
@@ -24,6 +24,19 @@ export type { FlattenKind } from './core.js';
 //   'content'        -> a tool_result block inside message.content (the API message)
 //   'toolUseResult'  -> the top-level toolUseResult mirror Claude Code keeps per line
 export type FlattenSlot = 'content' | 'toolUseResult';
+
+// ─── Artifact model ─────────────────────────────────────────────────
+// Flatten keeps exactly ONE side artifact per session: a backup at
+// `<session>.jsonl.bak` that always holds the COMPLETE session, fully inlined —
+// "the session as if you'd never flattened". The live `<session>.jsonl` carries
+// the lightweight markers. The two are duals, maintained together on every
+// flatten:
+//   • backup = unflatten(live)   (the originals, complete)
+//   • live   = flatten(backup)   (the markers)
+// retrieve reads an original straight out of the backup; unflatten re-inlines the
+// live file from the backup and then DELETES the backup, so a fully restored
+// session leaves zero artifacts behind. There is no sidecar and no
+// pre-unflatten snapshot — the model is self-cleaning by construction.
 
 export interface FlattenEntry {
     id: string;            // unique key: tool_use_id, or "<tool_use_id>#tur" for the mirror
@@ -52,9 +65,7 @@ export interface FlattenResult {
     contextTokensSaved: number;         // tokens removed from the model's context
     contextTokensExact: boolean;        // true if counted via count_tokens, false if estimated
     imageBlocksFlattened: number;       // images removed (huge disk win, small token win)
-    sidecarPath: string;
-    backupPath: string;
-    skipped?: string;
+    backupPath: string;                 // the single self-syncing backup (complete inlined session)
     entries: Array<{ id: string; name: string; size: number; kind: FlattenKind; slot: FlattenSlot }>;
 }
 
@@ -64,7 +75,7 @@ export interface UnflattenResult {
     notFound: string[];
     originalSize: number;
     newSize: number;
-    backupPath: string;
+    backupPath: string;          // the backup that was restored from (and removed on full restore)
     skipped?: string;
 }
 
@@ -80,13 +91,6 @@ export interface RetrieveResult {
 
 /** Suffix distinguishing a flattened toolUseResult entry from its content sibling. */
 const TUR_ID_SUFFIX = '#tur';
-
-/**
- * A session file modified more recently than this is assumed to be live (Claude
- * Code is still appending to it). Rewriting it in place risks racing concurrent
- * writes, so we refuse unless force=true. Read-only dry runs are always allowed.
- */
-const ACTIVE_SESSION_THRESHOLD_MS = 10_000;
 
 /**
  * Scan assistant messages for tool_use blocks and build a map from
@@ -156,23 +160,10 @@ function usageContextTokens(usage: unknown): number {
 }
 
 /**
- * Write extracted flatten entries to the sidecar JSONL file. Appends if the
- * file already exists.
- */
-export async function writeSidecar(
-    sidecarPath: string,
-    entries: FlattenEntry[]
-): Promise<void> {
-    if (entries.length === 0) return;
-    const lines = entries.map(entry => JSON.stringify(entry));
-    await fs.appendFile(sidecarPath, lines.join('\n') + '\n', 'utf-8');
-}
-
-/**
  * Atomic write: stage the new bytes in a sibling temp file, then rename(2) over
  * the target. rename is atomic on the same filesystem, so a crash mid-write can
- * never leave a half-written (truncated/corrupt) session JSONL — the
- * irreplaceable file is either fully the old version or fully the new one.
+ * never leave a half-written (truncated/corrupt) file — the target is either
+ * fully the old version or fully the new one.
  */
 async function writeFileAtomic(filePath: string, content: string): Promise<void> {
     const tmp = `${filePath}.tmp-${process.pid}`;
@@ -181,53 +172,111 @@ async function writeFileAtomic(filePath: string, content: string): Promise<void>
 }
 
 /**
- * Collect the ids already present in a sidecar. Makes flatten idempotent at the
- * sidecar level: if a previous run crashed AFTER appending entries but BEFORE
- * rewriting the main file, the next run must not append the same originals
- * again. Returns an empty set if the sidecar does not exist yet.
+ * Harvest every original payload from a session's lines into an id -> value map,
+ * keyed exactly as the markers reference them: content tool_results by
+ * tool_use_id, and toolUseResult mirrors by "<tool_use_id>#tur". Used to read the
+ * complete originals out of the backup. Already-flattened values (markers) are
+ * skipped — the backup is expected to be fully inlined, but a stray marker (e.g.
+ * an unrecoverable prior state) is never mistaken for an original.
  */
-async function readSidecarIds(sidecarPath: string): Promise<Set<string>> {
-    const ids = new Set<string>();
-    try {
-        const rl = readline.createInterface({
-            input: createReadStream(sidecarPath, { encoding: 'utf-8' }),
-            crlfDelay: Infinity,
-        });
-        for await (const line of rl) {
-            if (!line.trim()) continue;
-            try {
-                const entry = JSON.parse(line) as FlattenEntry;
-                if (entry.id) ids.add(entry.id);
-            } catch {
-                continue;
+function harvestOriginals(lines: string[]): Map<string, unknown> {
+    const map = new Map<string, unknown>();
+
+    for (let idx = 0; idx < lines.length; idx++) {
+        let parsed: (SessionMessage & { toolUseResult?: unknown });
+        try {
+            parsed = JSON.parse(lines[idx]);
+        } catch {
+            continue;
+        }
+
+        let lineToolUseId: string | null = null;
+
+        if (parsed.type === 'user' && Array.isArray(parsed.message?.content)) {
+            for (const block of parsed.message!.content as ContentBlock[]) {
+                if (block.type !== 'tool_result') continue;
+                if (!lineToolUseId && block.tool_use_id) lineToolUseId = block.tool_use_id;
+                const c = block.content;
+                if (
+                    block.tool_use_id && c !== undefined && c !== null &&
+                    !(typeof c === 'string' && c.startsWith(MARKER_PREFIX))
+                ) {
+                    map.set(block.tool_use_id, c);
+                }
             }
         }
-    } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+
+        if (parsed.toolUseResult != null) {
+            const tur = parsed.toolUseResult;
+            if (!(typeof tur === 'string' && tur.startsWith(MARKER_PREFIX))) {
+                // Mirror key mirrors flatten's id construction. With a tool_use_id
+                // present (the normal case) the key is position-independent and
+                // aligns regardless of where the line sits; the line-index fallback
+                // is reserved for the rare mirror-without-tool_result shape.
+                const base = lineToolUseId ?? `line${idx}`;
+                map.set(`${base}${TUR_ID_SUFFIX}`, tur);
+            }
+        }
     }
-    return ids;
+
+    return map;
 }
 
 /**
- * Back up the original JSONL ONCE. If a backup already exists it is preserved —
- * never overwritten — so re-running flatten can't clobber the true original
- * with an already-flattened copy.
+ * Re-inline a session's lines against an id -> original map: every
+ * `[FLATTENED id=…]` marker whose id is present is replaced by its original
+ * value, in both the message.content and toolUseResult slots. Lines with no
+ * resolvable marker pass through verbatim. This is the shared workhorse behind
+ * both "rebuild the complete backup" (flatten) and "restore the live file"
+ * (unflatten). The input strings are never mutated; a new array is returned.
  */
-export async function backupOnce(filePath: string, backupPath: string): Promise<void> {
-    try {
-        await fs.copyFile(filePath, backupPath, FS_CONSTANTS.COPYFILE_EXCL);
-    } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'EEXIST') return;
-        throw err;
+function inlineLines(lines: string[], originals: Map<string, unknown>): string[] {
+    const out: string[] = [];
+
+    for (const line of lines) {
+        let parsed: (SessionMessage & { toolUseResult?: unknown });
+        try {
+            parsed = JSON.parse(line);
+        } catch {
+            out.push(line);
+            continue;
+        }
+
+        let modified = false;
+
+        if (parsed.type === 'user' && Array.isArray(parsed.message?.content)) {
+            const blocks = parsed.message!.content as ContentBlock[];
+            for (let i = 0; i < blocks.length; i++) {
+                const block = blocks[i];
+                if (block.type !== 'tool_result' || typeof block.content !== 'string') continue;
+                const match = block.content.match(MARKER_ID_RE);
+                if (!match) continue;
+                const id = match[1];
+                if (originals.has(id)) {
+                    blocks[i] = { ...block, content: originals.get(id) as ContentBlock['content'] };
+                    modified = true;
+                }
+            }
+        }
+
+        if (typeof parsed.toolUseResult === 'string') {
+            const match = parsed.toolUseResult.match(MARKER_ID_RE);
+            if (match && originals.has(match[1])) {
+                parsed.toolUseResult = originals.get(match[1]);
+                modified = true;
+            }
+        }
+
+        out.push(modified ? JSON.stringify(parsed) : line);
     }
+
+    return out;
 }
 
 function emptyResult(
     sessionId: string,
     originalSize: number,
-    sidecarPath: string,
     backupPath: string,
-    skipped?: string,
     contextTokensTotal: number | null = null
 ): FlattenResult {
     return {
@@ -240,31 +289,32 @@ function emptyResult(
         contextTokensSaved: 0,
         contextTokensExact: false,
         imageBlocksFlattened: 0,
-        sidecarPath,
         backupPath,
-        skipped,
         entries: [],
     };
 }
 
 /**
  * Main flatten entry point. Reads the session JSONL and extracts bulky payloads
- * larger than minSize to a lossless sidecar, replacing them with lightweight
- * markers. Two payload sources are handled:
+ * larger than minSize, replacing them with lightweight markers. Two payload
+ * sources are handled:
  *   1. tool_result blocks in message.content — text AND base64 image blocks.
  *   2. the top-level toolUseResult mirror Claude Code stores per result line,
  *      which duplicates (1) on disk. Controlled by flattenToolUseResult.
+ *
+ * Extraction is idempotent at the line level (lines already carrying a marker
+ * are skipped), so re-running on a live session only touches newly-arrived bulk
+ * and the reported metrics are per-operation. The originals are persisted to the
+ * single backup, which is rebuilt each run as the COMPLETE inlined session
+ * (markers already in the live file are resolved against the prior backup; bulk
+ * added since the last flatten is still inline and passes through).
  */
 export async function flattenSession(
     filePath: string,
     minSize: number,
     dryRun: boolean,
-    force = false,
     flattenToolUseResult = true
 ): Promise<FlattenResult> {
-    const sessionDir = filePath.replace(/\/[^/]+$/, '');
-    const sessionFileName = filePath.replace(/^.*\//, '').replace(/\.jsonl$/, '');
-    const sidecarPath = `${sessionDir}/${sessionFileName}.flat.jsonl`;
     const backupPath = `${filePath}.bak`;
 
     const originalContent = await fs.readFile(filePath, 'utf-8');
@@ -285,25 +335,8 @@ export async function flattenSession(
         }
     }
 
-    // Live-session guard: refuse to rewrite a file that is likely being written
-    // to right now (e.g. the caller's own current session). Dry runs are safe.
-    if (!dryRun && !force) {
-        const stat = await fs.stat(filePath);
-        const ageMs = Date.now() - stat.mtimeMs;
-        if (ageMs < ACTIVE_SESSION_THRESHOLD_MS) {
-            return emptyResult(
-                sessionId,
-                originalSize,
-                sidecarPath,
-                backupPath,
-                `Session was modified ${Math.round(ageMs / 1000)}s ago and may be active (Claude Code still appending). ` +
-                `Rewriting it could race concurrent writes. Re-run with force=true once the session is idle, or flatten a different session.`
-            );
-        }
-    }
-
     const toolNameMap = buildToolNameMap(lines);
-    const sidecarEntries: FlattenEntry[] = [];
+    const extracted: FlattenEntry[] = [];
     const modifiedLines: string[] = [];
 
     // Context-token accumulators. Only message.content removals (slot 'content')
@@ -361,7 +394,7 @@ export async function flattenSession(
             const toolInput = toolInfo?.input ?? {};
 
             const marker = buildMarker({ id: toolUseId, name: toolName, input: toolInput, kind, size, lineCount, sessionId });
-            sidecarEntries.push({
+            extracted.push({
                 id: toolUseId, slot: 'content', name: toolName, input: toolInput,
                 content: original, size, lineCount, timestamp, kind,
             });
@@ -394,7 +427,7 @@ export async function flattenSession(
                     const lineCount = typeof tur === 'string' ? tur.split('\n').length : 1;
 
                     const marker = buildMarker({ id, name: toolName, input: toolInput, kind, size, lineCount, sessionId });
-                    sidecarEntries.push({
+                    extracted.push({
                         id, slot: 'toolUseResult', name: toolName, input: toolInput,
                         content: tur, size, lineCount, timestamp, kind,
                     });
@@ -407,8 +440,8 @@ export async function flattenSession(
         modifiedLines.push(modified ? JSON.stringify(parsed) : line);
     }
 
-    if (sidecarEntries.length === 0) {
-        return emptyResult(sessionId, originalSize, sidecarPath, backupPath, undefined, contextTokensTotal);
+    if (extracted.length === 0) {
+        return emptyResult(sessionId, originalSize, backupPath, contextTokensTotal);
     }
 
     const newContent = modifiedLines.join('\n') + '\n';
@@ -429,19 +462,30 @@ export async function flattenSession(
     }
 
     if (!dryRun) {
-        // Order matters for crash-safety: persist originals to the sidecar BEFORE
-        // removing them from the main file, and dedupe so a re-run after a crash
-        // can't append the same originals twice.
-        const existingIds = await readSidecarIds(sidecarPath);
-        const newEntries = sidecarEntries.filter(e => !existingIds.has(e.id));
-        await writeSidecar(sidecarPath, newEntries);
-        await backupOnce(filePath, backupPath);
+        // Rebuild the backup as the COMPLETE inlined session: resolve the markers
+        // already in the live file against the prior backup (bulk added since the
+        // last flatten is still inline in `lines` and passes through). Empty map
+        // on the first flatten, so the backup is then the verbatim pristine
+        // original.
+        let priorOriginals = new Map<string, unknown>();
+        try {
+            const backupContent = await fs.readFile(backupPath, 'utf-8');
+            priorOriginals = harvestOriginals(backupContent.trimEnd().split('\n'));
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+        const completeContent = inlineLines(lines, priorOriginals).join('\n') + '\n';
+
+        // Order matters for crash-safety: persist the complete originals to the
+        // backup BEFORE removing the bulk from the live file. A crash between the
+        // two leaves the live file's markers fully resolvable against the backup.
+        await writeFileAtomic(backupPath, completeContent);
         await writeFileAtomic(filePath, newContent);
     }
 
     return {
         sessionId,
-        flattenedCount: sidecarEntries.length,
+        flattenedCount: extracted.length,
         bytesSaved,
         originalSize,
         newSize,
@@ -449,44 +493,35 @@ export async function flattenSession(
         contextTokensSaved,
         contextTokensExact,
         imageBlocksFlattened,
-        sidecarPath,
         backupPath,
-        entries: sidecarEntries.map(e => ({ id: e.id, name: e.name, size: e.size, kind: e.kind, slot: e.slot })),
+        entries: extracted.map(e => ({ id: e.id, name: e.name, size: e.size, kind: e.kind, slot: e.slot })),
     };
 }
 
 /**
  * Restore a flattened session in place: re-inline every flattened tool_result
- * AND toolUseResult mirror from its sidecar. The reverse of flattenSession.
- * Snapshots the flattened file to <file>.preunflatten.bak before writing.
+ * AND toolUseResult mirror from the backup, then DELETE the backup so a fully
+ * restored session leaves zero artifacts behind. The reverse of flattenSession.
+ *
+ * We re-inline the live file (rather than copy the backup over it) so that any
+ * content appended AFTER the last flatten — present in the live file but not yet
+ * in the backup — is preserved. The backup is removed only on a clean restore
+ * (every marker resolved); if anything was unresolved it is kept for inspection.
  */
 export async function unflattenSession(
     filePath: string,
-    sidecarPath: string
+    backupPath: string
 ): Promise<UnflattenResult> {
-    const backupPath = `${filePath}.preunflatten.bak`;
-
-    // Build id -> original-value map from the sidecar (last entry wins).
-    const valueById = new Map<string, unknown>();
+    // Build id -> original-value map from the backup (the complete inlined session).
+    let originals: Map<string, unknown>;
     try {
-        const rl = readline.createInterface({
-            input: createReadStream(sidecarPath, { encoding: 'utf-8' }),
-            crlfDelay: Infinity,
-        });
-        for await (const line of rl) {
-            if (!line.trim()) continue;
-            try {
-                const entry = JSON.parse(line) as FlattenEntry;
-                valueById.set(entry.id, entry.content);
-            } catch {
-                continue;
-            }
-        }
+        const backupContent = await fs.readFile(backupPath, 'utf-8');
+        originals = harvestOriginals(backupContent.trimEnd().split('\n'));
     } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
             return {
                 sessionId: '', restoredCount: 0, notFound: [], originalSize: 0, newSize: 0,
-                backupPath, skipped: `No sidecar found at ${sidecarPath}. Nothing to restore.`,
+                backupPath, skipped: `No backup found at ${backupPath}. Nothing to restore.`,
             };
         }
         throw err;
@@ -527,8 +562,8 @@ export async function unflattenSession(
             const match = block.content.match(MARKER_ID_RE);
             if (!match) continue;
             const id = match[1];
-            if (valueById.has(id)) {
-                contentBlocks[i] = { ...block, content: valueById.get(id) as ContentBlock['content'] };
+            if (originals.has(id)) {
+                contentBlocks[i] = { ...block, content: originals.get(id) as ContentBlock['content'] };
                 restoredCount++;
                 modified = true;
             } else {
@@ -541,8 +576,8 @@ export async function unflattenSession(
             const match = parsed.toolUseResult.match(MARKER_ID_RE);
             if (match) {
                 const id = match[1];
-                if (valueById.has(id)) {
-                    parsed.toolUseResult = valueById.get(id);
+                if (originals.has(id)) {
+                    parsed.toolUseResult = originals.get(id);
                     restoredCount++;
                     modified = true;
                 } else {
@@ -558,63 +593,119 @@ export async function unflattenSession(
     const newSize = Buffer.byteLength(newContent, 'utf-8');
 
     if (restoredCount > 0) {
-        await fs.copyFile(filePath, backupPath);
         await writeFileAtomic(filePath, newContent);
+    }
+
+    // Self-cleaning: once every marker resolved, the backup has served its
+    // purpose — remove it so a fully restored session leaves nothing behind. If
+    // any marker was unresolved, keep the backup for inspection.
+    if (notFound.length === 0) {
+        try {
+            await fs.unlink(backupPath);
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
     }
 
     return { sessionId, restoredCount, notFound, originalSize, newSize, backupPath };
 }
 
 /**
- * Retrieve an original payload from a sidecar file by id. Streams the sidecar
- * JSONL line by line to avoid loading the entire file. Returns the raw value
- * (string, content-block array incl. images, or toolUseResult object) so the
- * caller can render text and images appropriately.
+ * Retrieve an original payload from the backup by id. Streams the backup JSONL
+ * line by line and returns the raw value (string, content-block array incl.
+ * images, or toolUseResult object) so the caller can render text and images
+ * appropriately. The id is either a tool_use_id (content slot) or
+ * "<tool_use_id>#tur" (the toolUseResult mirror slot).
  */
 export async function retrieveFlattened(
-    sidecarPath: string,
+    backupPath: string,
     toolUseId: string
 ): Promise<RetrieveResult> {
+    const wantMirror = toolUseId.endsWith(TUR_ID_SUFFIX);
+    const baseId = wantMirror ? toolUseId.slice(0, -TUR_ID_SUFFIX.length) : toolUseId;
+
     const rl = readline.createInterface({
-        input: createReadStream(sidecarPath, { encoding: 'utf-8' }),
+        input: createReadStream(backupPath, { encoding: 'utf-8' }),
         crlfDelay: Infinity,
     });
 
+    // tool_use blocks (assistant) precede their tool_result, so a running map
+    // back-fills the name/input label by the time we reach the target.
+    const toolNameMap = new Map<string, { name: string; input: Record<string, unknown> }>();
     const availableIds: string[] = [];
-    // Last-wins, consistent with unflattenSession (which overwrites by id). If a
-    // crashed run left a duplicate id, both restore and retrieve resolve to the
-    // same — the most recent — entry.
     let found: RetrieveResult | null = null;
+    let idx = -1;
 
     for await (const line of rl) {
+        idx++;
         if (!line.trim()) continue;
 
-        let entry: FlattenEntry;
+        let parsed: (SessionMessage & { toolUseResult?: unknown });
         try {
-            entry = JSON.parse(line) as FlattenEntry;
+            parsed = JSON.parse(line);
         } catch {
             continue;
         }
 
-        availableIds.push(entry.id);
+        if (parsed.type === 'assistant' && Array.isArray(parsed.message?.content)) {
+            for (const block of parsed.message!.content as ContentBlock[]) {
+                if (block.type === 'tool_use' && block.id && block.name) {
+                    toolNameMap.set(block.id, { name: block.name, input: block.input ?? {} });
+                }
+            }
+        }
 
-        if (entry.id === toolUseId) {
-            found = {
-                tool_use_id: entry.id,
-                tool_name: entry.name,
-                original_size: entry.size,
-                line_count: entry.lineCount,
-                kind: entry.kind ?? 'text',
-                slot: entry.slot ?? 'content',
-                content: entry.content,
-            };
+        if (parsed.type !== 'user' || !Array.isArray(parsed.message?.content)) continue;
+
+        let lineToolUseId: string | null = null;
+        for (const block of parsed.message!.content as ContentBlock[]) {
+            if (block.type !== 'tool_result') continue;
+            if (!lineToolUseId && block.tool_use_id) lineToolUseId = block.tool_use_id;
+            const c = block.content;
+            if (!block.tool_use_id || c === undefined || c === null) continue;
+            if (typeof c === 'string' && c.startsWith(MARKER_PREFIX)) continue;
+
+            availableIds.push(block.tool_use_id);
+            if (!found && !wantMirror && block.tool_use_id === baseId) {
+                const info = toolNameMap.get(block.tool_use_id);
+                const { kind, text } = classifyContent(c as string | ContentBlock[]);
+                found = {
+                    tool_use_id: toolUseId,
+                    tool_name: info?.name ?? 'unknown',
+                    original_size: valueByteSize(c),
+                    line_count: text ? text.split('\n').length : 1,
+                    kind: kind === 'none' ? 'text' : kind,
+                    slot: 'content',
+                    content: c,
+                };
+            }
+        }
+
+        if (parsed.toolUseResult != null) {
+            const tur = parsed.toolUseResult;
+            if (!(typeof tur === 'string' && tur.startsWith(MARKER_PREFIX))) {
+                const base = lineToolUseId ?? `line${idx}`;
+                availableIds.push(`${base}${TUR_ID_SUFFIX}`);
+                if (!found && wantMirror && base === baseId) {
+                    const info = lineToolUseId ? toolNameMap.get(lineToolUseId) : undefined;
+                    found = {
+                        tool_use_id: toolUseId,
+                        tool_name: info?.name ?? 'unknown',
+                        original_size: valueByteSize(tur),
+                        line_count: typeof tur === 'string' ? tur.split('\n').length : 1,
+                        kind: toolUseResultIsImage(tur) ? 'image' : 'text',
+                        slot: 'toolUseResult',
+                        content: tur,
+                    };
+                }
+            }
         }
     }
 
     if (found) return found;
 
-    // Cap the id list so a large sidecar doesn't produce a multi-KB error string.
+    // Cap the id list so a large backup doesn't produce a multi-KB error string.
     const shown = availableIds.slice(0, 20).join(', ');
     const more = availableIds.length > 20 ? ` (+${availableIds.length - 20} more)` : '';
-    throw new Error(`id "${toolUseId}" not found in sidecar. Available IDs: ${shown}${more}`);
+    throw new Error(`id "${toolUseId}" not found in backup. Available IDs: ${shown}${more}`);
 }

@@ -4,71 +4,50 @@
 
 # flatten-mcp
 
-> Resume the **exact same conversation** at a lower token cost — without compacting it into a lossy summary.
+> Cut the tokens every Claude Code session carries — real money on the API, more
+> headroom before the limit on a subscription — **without** compacting your history
+> into a lossy summary or losing a single line.
 
 <p align="left">
   <a href="https://www.npmjs.com/package/flatten-mcp"><img alt="npm version" src="https://img.shields.io/npm/v/flatten-mcp.svg"></a>
   <a href="https://www.npmjs.com/package/flatten-mcp"><img alt="npm downloads" src="https://img.shields.io/npm/dm/flatten-mcp.svg"></a>
   <a href="https://github.com/shayaShav/flatten-mcp/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
-  <a href="https://nodejs.org"><img alt="Node &gt;= 18" src="https://img.shields.io/badge/node-%3E%3D18-339933?logo=nodedotjs&amp;logoColor=white"></a>
   <a href="https://modelcontextprotocol.io"><img alt="Model Context Protocol" src="https://img.shields.io/badge/MCP-server-6E56CF.svg"></a>
   <a href="https://docs.claude.com/en/docs/claude-code"><img alt="Built for Claude Code" src="https://img.shields.io/badge/built%20for-Claude%20Code-D97757.svg"></a>
   <a href="https://smithery.ai/server/@shaya-shaviv/flatten-mcp"><img alt="Smithery calls" src="https://smithery.ai/badge/@shaya-shaviv/flatten-mcp"></a>
 </p>
 
-**flatten-mcp** is a [Model Context Protocol](https://modelcontextprotocol.io) server for [Claude Code](https://docs.claude.com/en/docs/claude-code). It shrinks a session's token footprint by moving bulky tool output (large file reads, command logs, base64 screenshots) out of the conversation and into a sidecar file — leaving a tiny, retrievable reference in its place. Your prompts and the chronological flow of the session are preserved **verbatim** — those lines are never rewritten. You resume the same raw conversation; it just costs less to carry.
-
-See how 317,236 tokens turned into 182,287:
+<p align="center"><b>317,236 → 182,287 tokens — a 43% lighter session, every line of history intact.</b></p>
 
 https://github.com/user-attachments/assets/4672b3cd-f78f-4146-97ba-e0077b655381
 
----
+Most of a long session's tokens are **bulk the model already distilled into prose** — the
+2 MB log it boiled down to one line, the screenshot it described, the five files it
+summarized. That raw source has done its job. **flatten-mcp** sets it aside in a local backup
+and leaves a small `[FLATTENED …]` marker, so every resumed turn carries far fewer tokens.
+Your prompts and the exact timeline stay **verbatim** — nothing is rewritten, nothing is
+summarized away, and any block is one call (or one `unflatten`) from coming back.
 
-## Why flatten instead of compact?
-
-The standard answer to a full context window is **compaction**: the model reads the whole conversation and rewrites it into a shorter summary. That summary is lossy by construction — an *interpretation* of your history, and interpretations drift, smooth over the awkward parts, and quietly drop the detail you didn't know you'd need. But the history is exactly what's worth keeping verbatim: the words you typed at 2 a.m., the precise order of events, the dead ends and the decisions. A fuzzy, half-formed prompt carries more raw truth about your intent than any tidy paragraph written *about* it after the fact — and preserving it untouched is the foundation of trust in a coding agent.
-
-**Flattening is the opposite move.** It changes *nothing* about what was said. In most sessions the model reads a lot — large files, long logs, multiple sources — and keeps every byte of it in context, even though it has nearly always already **written down the conclusion in plain prose**: the one line that mattered in a 2 MB log, the finding distilled from five files, the running tally of open tasks. The raw source has done its job. Flattening lifts those already-summarized blocks out and swaps each for a lightweight reference ID — so starting cold from a flattened session is usually smooth sailing, and on the rare occasion the raw bytes *are* needed, they're one `retrieve_flattened` call away.
-
-```
-What sits in the context window:
-
-   USER         "fix the crash"
-   ASSISTANT    reading the logs…
-   TOOL_RESULT  ▓▓▓ 2 MB log dump ▓▓▓        ← bulk; already summarized in prose below
-   ASSISTANT    "the OOM is at line 88,402 — the fix is …"
-
-After flatten — same words, only the bulk set aside:
-
-   USER         "fix the crash"
-   ASSISTANT    reading the logs…
-   TOOL_RESULT  [FLATTENED id=… → sidecar]   ← one marker; fetch the full dump on demand
-   ASSISTANT    "the OOM is at line 88,402 — the fix is …"
-```
-
-## What you'll actually save
-
-Token reduction depends entirely on what the session did:
-
-- **Read-heavy sessions** (lots of large files, logs, or screenshots in context) — expect reductions **up to ~50%**.
-- **Prose-heavy sessions** (little external data ingested) — savings are negligible. There's simply not much bulk to move.
-- It varies a lot — often a pleasant surprise, and once in a while a touch underwhelming.
-
-**When to reach for it.** A common point is around **200k** tokens. For critical sessions where you want the model at its sharpest and most context-aware, flattening around **250k–300k** is where the most dramatic reductions tend to show up.
-
-**Flatten smartly**, the same way you wouldn't compact mid-way through a large reading task. That said, nothing is ever lost — flattening everything and then cherry-picking the few blocks you still need is a perfectly legitimate strategy.
+**Who it's for:** heavy Claude Code users — large file reads, long command logs, or
+screenshot-heavy (Playwright) sessions — who want to pay for fewer tokens without losing
+their history.
 
 ---
 
 ## Quick start
 
-> Requires **Node.js ≥ 18** and **Claude Code**.
+flatten-mcp runs through `npx` — **no global install, nothing added to your project**, and
+every read/write stays inside Claude Code's own session store under
+`~/.claude/projects/`. Zero network calls by default. (Needs Node ≥ 18, which Claude Code
+already runs on.)
 
 One command — installs from [npm](https://www.npmjs.com/package/flatten-mcp) and registers it user-wide:
 
 ```bash
 claude mcp add flatten -s user -- npx -y flatten-mcp@latest
 ```
+
+Prefer to vet upgrades yourself? Pin an exact version: `npx -y flatten-mcp@2.0.0`.
 
 Or register it manually (in `~/.claude.json`, or your project's `.mcp.json`):
 
@@ -114,64 +93,68 @@ Register the local build instead:
 
 </details>
 
-### Uninstall
-
-```bash
-claude mcp remove flatten -s user       # unregister the server
-rm -f ~/.claude/commands/flatten.md     # remove the /flatten command, if installed
-```
-
-Flatten artifacts (`.flat.jsonl` sidecars, `.bak` backups) live next to your session files and are not deleted by uninstalling. To reclaim the disk, run `prune_flatten_artifacts` (with `include_sidecars: true`) **before** unregistering — or delete them manually from `~/.claude/projects/<encoded-project-dir>/`. Mind that flattened sessions need their sidecar for `retrieve_flattened` / `unflatten_session` — unflatten first if you want the bulk back inline.
-
-### Configuration
-
-By default the server operates on **the project the CLI runs in** (its current working directory). Pass `project_dir` explicitly on any call to target a different project.
-
-**Multiple Claude profiles.** Sessions are read from `$CLAUDE_CONFIG_DIR/projects/` when that env var is set, else `~/.claude/projects/`. Because Claude Code itself uses `CLAUDE_CONFIG_DIR` to pick a profile (e.g. a `claude-2` launcher that exports `CLAUDE_CONFIG_DIR=~/.claude-2`), a flatten-mcp server spawned inside an alternate profile **automatically** targets that profile's sessions. To reach another profile's sessions from a different one, pass `claude_dir` on any call — the absolute path (or `~/...`) to that profile's config dir, e.g. `claude_dir: "~/.claude-2"`.
-
-| Env var | Required | Purpose |
-| --- | --- | --- |
-| `CLAUDE_CONFIG_DIR` | no | Claude config dir whose `projects/` store is read. Defaults to `~/.claude`. Honors the same variable Claude Code uses for profile selection, so an alternate-profile session targets its own sessions with no extra config. Override per call with the `claude_dir` argument. |
-| `ANTHROPIC_API_KEY` | no | If set, token savings are counted **exactly** via Anthropic's free `count_tokens` endpoint instead of estimated locally. |
-| `FLATTEN_COUNT_MODEL` | no | Model id used for the exact token count (default: `claude-haiku-4-5-20251001`). |
-
 ## Usage
 
-> [!CAUTION]
-> **Always exit the session you want to flatten with `Ctrl-C`, then flatten it from a *different* window.** Rewriting a live session's file out from under Claude Code corrupts its in-memory state and bricks the session.
+> [!NOTE]
+> Flattening rewrites the session file in place. The window you're in keeps the pre-flatten copy in memory until you reload it, so **`/flatten`, then `/resume`** (switch to another session and back) to load the lighter copy.
 
-1. **Exit the session you want to flatten** with `Ctrl-C`. This is mandatory — a 10-second live-write guard refuses to touch a recently-modified session unless you force it, but exiting is the safe path.
-2. In a **new** Claude Code window, type `/flatten latest` or `/flatten <session-id>` — or ask:
-   > "Flatten the latest session."  ·  or  ·  "Flatten session `<session-id>`."
+1. In the session you want to shrink, type `/flatten` — or ask:
+   > "Flatten this session."
 
-   `/flatten latest` (or bare `/flatten`) flattens the **larger** of the two most recent sessions — the smaller, seconds-old one is almost always the window doing the flattening itself, and the session worth flattening is the big one. It never forces past the live-write guard.
-
-3. **Resume** your original session and send a prompt. When Claude starts outputting text, you'll see the token count drop.
+   Bare `/flatten` flattens the **current** session — the server identifies it from `CLAUDE_CODE_SESSION_ID`. Pass a UUID (`/flatten <session-id>`) to target a different session.
+2. **`/resume` the session** (switch to another session and back) and send a prompt. Until you do, this window still holds the full version; once reloaded, you'll see the token count drop when Claude next outputs text.
 
 To preview without touching anything, ask for a **dry run** first. To undo, ask to **unflatten** the session — every original block is restored to its exact original value.
 
 > [!TIP]
-> Flattening needs no model intelligence — park a second window on a fast, inexpensive model (`/model haiku`) as a dedicated flattening station and just type `/flatten latest`.
+> Flattening needs no model intelligence — it's pure file surgery, so a fast, inexpensive model (`/model haiku`) flattens just as well as a frontier one. Run `/flatten` from a separate window and your working session never even carries flatten-mcp's tool schemas.
 
-### Validate the claims yourself
+## What you'll actually save
 
-Every number flatten reports can be checked end to end in a couple of minutes:
+The reduction depends entirely on what the session did — it's the bulk you remove, not a fixed percentage:
 
-1. Pick a meaty session — or make one: have Claude read a few large files, then exit with `Ctrl-C`.
-2. In a new window, ask for a **dry run** — *"dry-run flatten the latest session"* — and read the report: `flattenedCount`, `contextTokensSaved` of `contextTokensTotal`, `diskBytesSaved`. Nothing has been written yet.
-3. Run `/flatten latest` for real, `claude --resume` the original session, and send any prompt — the context indicator drops by roughly the reported amount (exactly, when `ANTHROPIC_API_KEY` is set).
-4. Check reversibility: ask to **unflatten** the session, then diff the restored `.jsonl` against the `.jsonl.bak` backup created at flatten time — identical for Claude Code's canonical JSON.
+- **Read-heavy sessions** (large files, long logs, or screenshots in context) — the demo above went **317,236 → 182,287 tokens, a 43% cut**. The more of your context is ingested bulk, the bigger the cut; sessions dominated by base64 screenshots can go higher.
+- **Prose-heavy sessions** (little external data ingested) — savings are small. There's simply not much bulk to move.
+
+**When to reach for it.** A common point is around **200k** tokens; for critical sessions where you want the model at its sharpest, flattening around **250k–400k** is where the most dramatic cuts show up. Flatten the same way you wouldn't compact mid-way through a large reading task — though nothing is ever lost, so flattening everything and cherry-picking the few blocks you still need is a perfectly legitimate strategy.
+
+**Doesn't an MCP server add its own context cost?** Yes, and here it's small: the three tool
+schemas measure **~1,200 tokens per turn** while flatten-mcp is connected. A single flatten
+of a read-heavy session removes far more than that from **every** later turn — 135k in the
+demo — so it pays back the schema cost on the first flatten and many times over after. Want
+zero overhead in your main session? Run `/flatten` from a separate window (see the tip above).
+
+---
+
+## Why flatten instead of compact?
+
+The standard answer to a full context window is **compaction**: the model reads the whole conversation and rewrites it into a shorter summary. That summary is lossy by construction — an *interpretation* of your history, and interpretations drift, smooth over the awkward parts, and quietly drop the detail you didn't know you'd need. But the history is exactly what's worth keeping verbatim: the words you typed at 2 a.m., the precise order of events, the dead ends and the decisions. A fuzzy, half-formed prompt carries more raw truth about your intent than any tidy paragraph written *about* it after the fact — and preserving it untouched is the foundation of trust in a coding agent.
+
+**Flattening is the opposite move.** It changes *nothing* about what was said. In most sessions the model reads a lot — large files, long logs, multiple sources — and keeps every byte in context, even though it has nearly always already **written the conclusion down in plain prose**: the one line that mattered in a 2 MB log, the finding distilled from five files, the running tally of open tasks. The raw source has done its job. Flattening lifts those already-summarized blocks out and swaps each for a lightweight reference ID — so starting cold from a flattened session is usually smooth sailing, and on the rare occasion the raw bytes *are* needed, they're one `retrieve_flattened` call away.
+
+```
+What sits in the context window:
+
+   USER         "fix the crash"
+   ASSISTANT    reading the logs…
+   TOOL_RESULT  ▓▓▓ 2 MB log dump ▓▓▓        ← bulk; already summarized in prose below
+   ASSISTANT    "the OOM is at line 88,402 — the fix is …"
+
+After flatten — same words, only the bulk set aside:
+
+   USER         "fix the crash"
+   ASSISTANT    reading the logs…
+   TOOL_RESULT  [FLATTENED id=… → backup]    ← one marker; fetch the full dump on demand
+   ASSISTANT    "the OOM is at line 88,402 — the fix is …"
+```
 
 ## Tools
 
 | Tool | What it does |
 | --- | --- |
-| `flatten_session` | Move bulky tool results into a sidecar, leaving `[FLATTENED …]` markers. Crash-safe and reversible. Supports `dry_run`, `min_size`, `force`, and `include_tool_use_result`. |
+| `flatten_session` | Move bulky tool results into a backup copy, leaving `[FLATTENED …]` markers. Crash-safe and reversible. With no argument, flattens the current live session. Supports `dry_run`, `min_size`, and `include_tool_use_result`. |
 | `retrieve_flattened` | Fetch one original block back by its id — returns the original text, or re-renders a flattened screenshot as a real image. |
-| `unflatten_session` | Reverse a flatten completely: re-inline every block from the sidecar, restoring each flattened result to its exact original value. |
-| `prune_flatten_artifacts` | Reclaim disk by deleting leftover `.bak` / `.tmp` files (and, opt-in, sidecars). Defaults to a safe dry run. |
-| `list_sessions` | List a project's sessions with branch, message count, size, and first prompt. |
-| `search_sessions` | Keyword / branch / date search across past sessions — scans prose, tool I/O, **and** flatten sidecars so nothing goes dark after flattening. |
+| `unflatten_session` | Reverse a flatten completely: re-inline every block from the backup, then delete the backup so a fully restored session leaves nothing behind. |
 
 When a session is flattened, the model sees compact markers like this in place of the original output:
 
@@ -181,9 +164,29 @@ When a session is flattened, the model sees compact markers like this in place o
 
 Everything the model needs to fetch the original — the id and the session — is right there in the marker.
 
+## CLI — flatten a Messages API conversation from any language
+
+Not in Claude Code? `flatten-mcp-cli` runs the same engine over **stdin/stdout**, so a caller
+in any language (Python, Go, Ruby, shell) can flatten a raw Anthropic Messages API
+`messages[]` array without importing the JS library — no server, no MCP, no disk, no network.
+
+```bash
+# Flatten: stdin is a messages[] array, or {"messages":[...],"minSize"?:N}
+echo '[{"role":"user","content":"hi"}]' | npx flatten-mcp-cli --flatten
+npx flatten-mcp-cli --flatten --min-size 2000 < body.json > flattened.json
+
+# Unflatten: stdin is the --flatten output ({messages, extracted}); restored byte-for-byte
+npx flatten-mcp-cli --unflatten < flattened.json > restored.json
+```
+
+- `--flatten` prints `{ messages, extracted, flattenedCount, imageBlocksFlattened, contextTokensSaved }`. **Persist `extracted` yourself — you are the store.**
+- `--unflatten` prints `{ messages }`, restored byte-for-byte from the `--flatten` output (extra keys ignored).
+- `--min-size N` overrides the 1000-byte default (the flag wins over an inline `minSize`).
+- Bad usage or bad JSON → a message on stderr and exit code 1.
+
 ## Library API — flatten a raw Messages API conversation in-memory
 
-Calling the Anthropic Messages API (`POST /v1/messages`) directly, with no Claude
+Calling the Anthropic Messages API (`POST /v1/messages`) directly from Node, with no Claude
 Code and no session file? Import the flatten engine and run it on the
 `messages[]` array already in your process — no server, no HTTP, no MCP, no disk:
 
@@ -211,35 +214,99 @@ flattening deep-copies first.
 - **The caller is the store.** There is no sidecar — persist `extracted` and feed it back to restore.
 - **Prompt-caching caveat.** Flattening earlier messages changes the cached prefix and invalidates `cache_control` breakpoints from that point. Flatten **before** establishing a cache breakpoint.
 
-This is the *no-storage adapter* of the pluggable backend below; the disk MCP
+The CLI and the library are the *no-storage adapter* of the pluggable backend; the disk MCP
 tools are the *Claude Code adapter* over the same block logic.
 
 ## How it works
 
-- **Sidecar, not deletion.** Each extracted block is written verbatim to `<session>.flat.jsonl` next to the session. The original session file is backed up **once** to `<session>.jsonl.bak` before the first rewrite.
-- **Crash-safe.** Originals are persisted to the sidecar *before* they're removed from the session, and the session is rewritten via an atomic temp-file-and-`rename`, so an interrupted run can never leave a half-written, irreplaceable session file.
-- **Idempotent.** Re-running flatten skips already-flattened blocks and never double-writes a sidecar entry.
+- **One backup, not deletion.** flatten keeps a single artifact next to the session: `<session>.jsonl.bak`, holding the **complete session, fully inlined** — every original block in place, as if you'd never flattened. The live `<session>.jsonl` carries the lightweight markers. The two are kept in lockstep on every run (`backup = unflatten(live)`, `live = flatten(backup)`).
+- **Crash-safe.** The complete originals are written to the backup *before* the bulk is removed from the session, each via an atomic temp-file-and-`rename`, so an interrupted run can never leave a half-written, irreplaceable session file — the live markers always resolve against the backup.
+- **Self-cleaning.** `unflatten_session` re-inlines the live file from the backup and then **deletes the backup**, so a fully restored session leaves zero artifacts behind. There is no sidecar and no pre-unflatten snapshot to mop up.
+- **Live re-flatten.** Re-running as the session grows only touches newly-arrived bulk; the backup is rebuilt each time to stay the complete inlined session, so every block — old or new — stays retrievable, and content added *after* a flatten is never lost on restore.
 - **Lossless & reversible.** Text and base64 images are stored exactly as they appeared, so `unflatten_session` restores each flattened block to its exact original value (byte-identical for Claude Code's canonical JSON). Your prompts and untouched lines were never altered to begin with.
 - **Disk vs. context tokens.** Claude Code stores each tool result twice on disk (once in the API message, once in a `toolUseResult` mirror) and only one copy is ever sent to the model. flatten reports both `diskBytesSaved` (affects `--resume` parse speed) and `contextTokensSaved` out of `contextTokensTotal` (the number that actually matters for the context window and compaction) — they differ a lot, and the tool is explicit about which is which.
 
-See [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/docs/ARCHITECTURE.md) for the session JSONL format, the sidecar schema, and the marker protocol.
+See [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/docs/ARCHITECTURE.md) for the session JSONL format, the backup model, and the marker protocol.
 
-## Security & disclosure
+### Validate the claims yourself
 
-The entire server is five small TypeScript files and two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [`zod`](https://www.npmjs.com/package/zod)) — it's a quick read. (The library export adds one more file, `src/lib.ts`, re-exporting the shared `src/core.ts`; it starts no server, and its only possible network call is the same opt-in `count_tokens` endpoint below — reached solely through the async `*Exact` functions when `ANTHROPIC_API_KEY` is set.)
+Every number flatten reports can be checked end to end in a couple of minutes:
+
+1. Pick a meaty session — or make one: have Claude read a few large files.
+2. Ask for a **dry run** — *"dry-run flatten this session"* — and read the report: `flattenedCount`, `contextTokensSaved` of `contextTokensTotal`, `diskBytesSaved`. Nothing has been written yet.
+3. Run `/flatten` for real, then `/resume` the session and send any prompt — the context indicator drops by roughly the reported amount (exactly, when `ANTHROPIC_API_KEY` is set).
+4. Check reversibility: while flattened, the `<session>.jsonl.bak` backup is the complete original — diff it against a copy of your pre-flatten session if you kept one. Then ask to **unflatten**: every block is restored to its exact original value (byte-identical for Claude Code's canonical JSON), and the backup is removed once the restore is clean.
+
+## Security & verification
+
+The server is five small TypeScript files; the shared engine, the library export, and the
+`flatten-mcp-cli` bin add a few more, all over the same `src/core.ts` — and the whole thing
+has just two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk),
+[`zod`](https://www.npmjs.com/package/zod)). It's a quick read.
 
 - **File access.** Every read and write is confined to Claude Code's session store, `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched.
 - **Network.** Zero network calls by default. When `ANTHROPIC_API_KEY` is set, exactly one endpoint is contacted: `POST https://api.anthropic.com/v1/messages/count_tokens` (free) to report exact token savings. The request body is the content being flattened — the same tool output and screenshots Anthropic already processed in the session — sent only to Anthropic for counting. The key is read from the environment, sent only as the auth header, and never stored or logged. There is no other URL in the codebase.
-- **No telemetry.** No analytics, no usage tracking, no phone-home.
-- **No shell execution, no hooks.** The server spawns no processes, executes no shell commands, installs no hooks, and does not need permission bypasses.
-- **Safe defaults.** The 10-second live-write guard refuses sessions that may still be active; `prune_flatten_artifacts` defaults to a dry run; the bundled `/flatten` command never passes `force`.
-- **Prefer pinned versions?** The quick-start tracks `flatten-mcp@latest`; swap in an exact version (`npx -y flatten-mcp@1.0.1`) if you want to vet upgrades yourself.
+- **No telemetry, no shell, no hooks.** No analytics, no usage tracking, no phone-home. The server spawns no processes, executes no shell commands, installs no hooks, and needs no permission bypasses.
+- **Safe defaults.** Every rewrite is backed up first and applied atomically — an interrupted run can't corrupt the session — and a **dry run** previews exactly what `flatten` would change before anything is written.
+
+**Verifying a build before you trust it.** Pin an exact version (`npx -y flatten-mcp@2.0.0`)
+rather than `@latest`, inspect the published tarball (`npm view flatten-mcp@2.0.0 dist.tarball`,
+or `npm pack` and read it — it's `dist/` plus this README and the license), and the committed
+`package-lock.json` pins the full dependency tree. The source is small enough to audit in one
+sitting. (Cryptographic publish provenance and signed tags aren't wired up yet — for now,
+pin-and-audit is the trust path.)
+
+## FAQ
+
+**Why not just use `/compact`?** Compaction rewrites your history into a shorter, lossy
+summary — it decides what to forget. Flatten keeps every prompt and event verbatim and only
+sets aside the bulky tool output the model already summarized; it's reversible, `/compact`
+isn't.
+
+**Won't Anthropic just build this in?** Pulling already-summarized raw bytes out of context
+is a sound practice regardless of how compaction evolves. Even if Claude Code grows its own
+version, a *lossless, reversible* move is a different guarantee than a summary.
+
+**Will the model actually fetch a flattened block, or hallucinate around it?** Each marker
+carries the `id` and `session`, and in practice the model calls `retrieve_flattened` when it
+needs the raw bytes back (verified on Claude Code's current session format and the standard
+flow). And it's deterministic regardless: `unflatten_session` re-inlines everything
+byte-for-byte whenever you want the full session back.
+
+**Does it need a JS/Node toolchain in my environment?** No. It runs through `npx`
+ephemerally and operates on Claude Code's files — it adds nothing to your project and doesn't
+touch your Python/Conda/whatever environment.
+
+**Can a team use it?** It's per-developer (it works on each dev's local session store).
+Standardize it across a team by committing the `mcpServers` config to your project's
+`.mcp.json` and shipping the `/flatten` command with your dotfiles.
 
 ## Compatibility & roadmap
 
 - **Claude Code only, for now.** flatten-mcp reads Claude Code's session store at `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/*.jsonl`. It has been tested against Claude Code exclusively; the paths and the JSONL schema are specific to it and **will not work** for other agents or LLM CLIs as-is. Path handling is POSIX (macOS/Linux); Windows is untested.
-- **Shipped — a no-storage adapter.** The [Library API](#library-api--flatten-a-raw-messages-api-conversation-in-memory) (`flattenMessages` / `unflattenMessages`) flattens an in-memory `messages[]` array for raw Messages API callers, with no session file. It's the first adapter over the shared block logic.
+- **Shipped — a no-storage adapter.** The [CLI](#cli--flatten-a-messages-api-conversation-from-any-language) and [Library API](#library-api--flatten-a-raw-messages-api-conversation-in-memory) (`flattenMessages` / `unflattenMessages`) flatten an in-memory `messages[]` array for raw Messages API callers, with no session file. It's the first adapter over the shared block logic.
 - **Planned — more session backends.** Porting to other agents means abstracting the storage location and the on-disk message format behind the same small adapter seam. Contributions welcome.
+
+## Configuration
+
+By default the server operates on **the project the CLI runs in** (its current working directory). Pass `project_dir` explicitly on any call to target a different project.
+
+**Multiple Claude profiles.** Sessions are read from `$CLAUDE_CONFIG_DIR/projects/` when that env var is set, else `~/.claude/projects/`. Because Claude Code itself uses `CLAUDE_CONFIG_DIR` to pick a profile (e.g. a `claude-2` launcher that exports `CLAUDE_CONFIG_DIR=~/.claude-2`), a flatten-mcp server spawned inside an alternate profile **automatically** targets that profile's sessions. To reach another profile's sessions from a different one, pass `claude_dir` on any call — the absolute path (or `~/...`) to that profile's config dir, e.g. `claude_dir: "~/.claude-2"`.
+
+| Env var | Required | Purpose |
+| --- | --- | --- |
+| `CLAUDE_CONFIG_DIR` | no | Claude config dir whose `projects/` store is read. Defaults to `~/.claude`. Honors the same variable Claude Code uses for profile selection, so an alternate-profile session targets its own sessions with no extra config. Override per call with the `claude_dir` argument. |
+| `ANTHROPIC_API_KEY` | no | If set, token savings are counted **exactly** via Anthropic's free `count_tokens` endpoint instead of estimated locally. |
+| `FLATTEN_COUNT_MODEL` | no | Model id used for the exact token count (default: `claude-haiku-4-5-20251001`). |
+
+## Uninstall
+
+```bash
+claude mcp remove flatten -s user       # unregister the server
+rm -f ~/.claude/commands/flatten.md     # remove the /flatten command, if installed
+```
+
+A `<session>.jsonl.bak` backup lives next to each flattened session and is **not** removed by uninstalling — only by `unflatten_session`, which restores the bulk inline and then deletes it. To reclaim disk for sessions you won't restore, delete the `.jsonl.bak` files manually from `~/.claude/projects/<encoded-project-dir>/`. Mind that a flattened session needs its backup for `retrieve_flattened` / `unflatten_session` — unflatten first if you want the bulk back inline.
 
 ## Contributing
 
@@ -249,6 +316,7 @@ Issues and PRs are welcome. To develop locally:
 npm install
 npm run dev        # tsc --watch
 npm run build      # one-off compile to dist/
+npm test           # vitest
 ```
 
 ## License

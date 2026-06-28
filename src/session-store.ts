@@ -3,7 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
-import type { SessionMeta, SearchResult, ContentBlock } from './types.js';
+import type { SessionMeta, ContentBlock } from './types.js';
 
 // Base Claude config dir. Honors CLAUDE_CONFIG_DIR — the same env var Claude Code
 // itself uses to select a profile (e.g. ~/.claude-2) — so a server spawned inside
@@ -47,14 +47,14 @@ async function streamJsonlLines(
     }
 }
 
-export async function listSessionFiles(
+async function listSessionFiles(
     sessionDir: string,
     opts: { countMessages?: boolean } = {}
 ): Promise<SessionMeta[]> {
     // countMessages=false stops reading each session as soon as its branch and
-    // first user message are known (messageCount stays 0). resolveSessionId and
-    // searchSessions never use the count, so they take this fast path instead of
-    // streaming every byte of every session on each call.
+    // first user message are known (messageCount stays 0). resolveSessionId never
+    // uses the count, so it takes this fast path instead of streaming every byte
+    // of every session on each call.
     const countMessages = opts.countMessages !== false;
 
     let entries: string[];
@@ -134,15 +134,21 @@ export async function resolveSessionId(
         return [sessionId];
     }
 
+    // "current" — the live session. Claude Code sets CLAUDE_CODE_SESSION_ID in the
+    // server's environment to the session it spawned this process for, so we target
+    // it exactly without scanning the directory. Falls through to most-recent below
+    // when unset (e.g. the server was not launched by Claude Code).
+    if (sessionId === 'current' && process.env.CLAUDE_CODE_SESSION_ID) {
+        return [process.env.CLAUDE_CODE_SESSION_ID];
+    }
+
     const sessions = await listSessionFiles(sessionDir, { countMessages: false });
     if (sessions.length === 0) return [];
 
     // Sort by file modification time (newest first via timestamp)
     sessions.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-    // "last" / "current" — both resolve to the most recent session. ("current"
-    // is documented as the active session; the MCP cannot know the caller's own
-    // session id, so it maps to the newest, guarded by the live-write check.)
+    // "last", or "current" when CLAUDE_CODE_SESSION_ID is unset — most recent session.
     if (sessionId === 'last' || sessionId === 'current') {
         return [sessions[0].sessionId];
     }
@@ -161,129 +167,4 @@ export async function resolveSessionId(
         s.gitBranch.toLowerCase().includes(keyword)
     );
     return matched.map(s => s.sessionId);
-}
-
-/**
- * Stringify tool_result content, which can be a string, an array of
- * content blocks, or undefined.
- */
-function stringifyToolResultContent(content: unknown): string {
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-        return content
-            .map((b: Record<string, unknown>) =>
-                b.type === 'text' && typeof b.text === 'string' ? b.text : ''
-            )
-            .filter(Boolean)
-            .join('\n');
-    }
-    return '';
-}
-
-export async function searchSessions(
-    sessionDir: string,
-    query?: string,
-    branch?: string,
-    dateFrom?: string,
-    dateTo?: string
-): Promise<SearchResult[]> {
-    const sessions = await listSessionFiles(sessionDir, { countMessages: false });
-    const results: SearchResult[] = [];
-
-    const dateFromMs = dateFrom ? new Date(dateFrom).getTime() : 0;
-    const dateToMs = dateTo ? new Date(dateTo).getTime() : Infinity;
-
-    for (const session of sessions) {
-        const sessionTime = new Date(session.timestamp).getTime();
-
-        // Date filter
-        if (sessionTime < dateFromMs || sessionTime > dateToMs) continue;
-
-        // Branch filter
-        if (branch && !session.gitBranch.toLowerCase().includes(branch.toLowerCase())) continue;
-
-        // Query filter - scan file content
-        if (query) {
-            let matchCount = 0;
-            let matchPreview = '';
-            const queryLower = query.toLowerCase();
-
-            const scanText = (text: string) => {
-                const lower = text.toLowerCase();
-                let idx = lower.indexOf(queryLower);
-                while (idx !== -1) {
-                    matchCount++;
-                    if (!matchPreview) {
-                        const start = Math.max(0, idx - 40);
-                        const end = Math.min(text.length, idx + query.length + 40);
-                        matchPreview = text.slice(start, end);
-                    }
-                    idx = lower.indexOf(queryLower, idx + 1);
-                }
-            };
-
-            await streamJsonlLines(session.filePath, (parsed) => {
-                const type = parsed.type as string;
-                if (type !== 'user' && type !== 'assistant') return;
-
-                const msg = parsed.message as { content: string | ContentBlock[] } | undefined;
-                if (!msg) return;
-
-                if (typeof msg.content === 'string') {
-                    scanText(msg.content);
-                } else if (Array.isArray(msg.content)) {
-                    // Search prose AND tool I/O: tool_result output and tool_use
-                    // inputs, not just text blocks — otherwise most of the
-                    // session's substance is invisible to search.
-                    for (const block of msg.content as ContentBlock[]) {
-                        if (block.type === 'text' && block.text) {
-                            scanText(block.text);
-                        } else if (block.type === 'tool_result') {
-                            scanText(stringifyToolResultContent(block.content));
-                        } else if (block.type === 'tool_use' && block.input) {
-                            scanText(JSON.stringify(block.input));
-                        }
-                    }
-                }
-            });
-
-            // Also scan the flatten sidecar so content extracted by
-            // flatten_session stays discoverable — otherwise flattening a
-            // session would silently blind keyword search to its bulk.
-            const sidecarPath = session.filePath.replace(/\.jsonl$/, '.flat.jsonl');
-            try {
-                await fs.access(sidecarPath);
-                await streamJsonlLines(sidecarPath, (parsed) => {
-                    const content = (parsed as { content?: unknown }).content;
-                    if (content == null) return;
-                    scanText(typeof content === 'string' ? content : JSON.stringify(content));
-                });
-            } catch {
-                // no sidecar — nothing extra to search
-            }
-
-            if (matchCount > 0) {
-                results.push({
-                    sessionId: session.sessionId,
-                    timestamp: session.timestamp,
-                    gitBranch: session.gitBranch,
-                    matchCount,
-                    matchPreview,
-                    fileSize: session.fileSize,
-                });
-            }
-        } else {
-            // No query — include all matching date/branch
-            results.push({
-                sessionId: session.sessionId,
-                timestamp: session.timestamp,
-                gitBranch: session.gitBranch,
-                matchCount: 0,
-                matchPreview: session.firstUserMessage,
-                fileSize: session.fileSize,
-            });
-        }
-    }
-
-    return results;
 }
