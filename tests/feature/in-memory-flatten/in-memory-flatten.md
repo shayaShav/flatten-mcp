@@ -56,8 +56,8 @@ The blocks transformed are byte-identical to the raw Messages API block shapes โ
 (content `string | block[]`), `image {source:{type:base64, media_type, data}}`.
 Claude Code embeds the unmodified API `message` object, so the same block logic
 the disk engine uses works on a raw `messages[]` array. See
-`docs/features/in-memory-flatten-api/in-memory-flatten-api.md` ยง4 for the full
-table.
+[docs/features/1-in-memory-flatten-api/1-in-memory-flatten-api.md](../../../docs/features/1-in-memory-flatten-api/1-in-memory-flatten-api.md)
+for the verified block contract.
 
 ## How to run the tests
 

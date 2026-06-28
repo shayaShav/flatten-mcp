@@ -19,8 +19,6 @@
 
 <p align="center"><b>317,236 → 182,287 tokens — a 43% lighter session, every line of history intact.</b></p>
 
-<!-- TODO: replace the link below with an embedded before/after GIF (assets/demo.gif) once the clip is recorded. GitHub auto-embeds the user-attachment video; npm renders it as a link. -->
-
 https://github.com/user-attachments/assets/4672b3cd-f78f-4146-97ba-e0077b655381
 
 Most of a long session's tokens are **bulk the model already distilled into prose** — the
