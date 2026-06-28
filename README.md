@@ -25,7 +25,7 @@ https://github.com/user-attachments/assets/4672b3cd-f78f-4146-97ba-e0077b655381
 
 Most of a long session's tokens are **bulk the model already distilled into prose** — the
 2 MB log it boiled down to one line, the screenshot it described, the five files it
-summarized. That raw source has done its job. **flatten-mcp** moves it into a local sidecar
+summarized. That raw source has done its job. **flatten-mcp** sets it aside in a local backup
 and leaves a small `[FLATTENED …]` marker, so every resumed turn carries far fewer tokens.
 Your prompts and the exact timeline stay **verbatim** — nothing is rewritten, nothing is
 summarized away, and any block is one call (or one `unflatten`) from coming back.
@@ -49,7 +49,7 @@ One command — installs from [npm](https://www.npmjs.com/package/flatten-mcp) a
 claude mcp add flatten -s user -- npx -y flatten-mcp@latest
 ```
 
-Prefer to vet upgrades yourself? Pin an exact version: `npx -y flatten-mcp@1.1.0`.
+Prefer to vet upgrades yourself? Pin an exact version: `npx -y flatten-mcp@2.0.0`.
 
 Or register it manually (in `~/.claude.json`, or your project's `.mcp.json`):
 
@@ -118,10 +118,10 @@ The reduction depends entirely on what the session did — it's the bulk you rem
 - **Read-heavy sessions** (large files, long logs, or screenshots in context) — the demo above went **317,236 → 182,287 tokens, a 43% cut**. The more of your context is ingested bulk, the bigger the cut; sessions dominated by base64 screenshots can go higher.
 - **Prose-heavy sessions** (little external data ingested) — savings are small. There's simply not much bulk to move.
 
-**When to reach for it.** A common point is around **200k** tokens; for critical sessions where you want the model at its sharpest, flattening around **250k–300k** is where the most dramatic cuts show up. Flatten the same way you wouldn't compact mid-way through a large reading task — though nothing is ever lost, so flattening everything and cherry-picking the few blocks you still need is a perfectly legitimate strategy.
+**When to reach for it.** A common point is around **200k** tokens; for critical sessions where you want the model at its sharpest, flattening around **250k–400k** is where the most dramatic cuts show up. Flatten the same way you wouldn't compact mid-way through a large reading task — though nothing is ever lost, so flattening everything and cherry-picking the few blocks you still need is a perfectly legitimate strategy.
 
-**Doesn't an MCP server add its own context cost?** Yes, and here it's small: the four tool
-schemas measure **~1,600 tokens per turn** while flatten-mcp is connected. A single flatten
+**Doesn't an MCP server add its own context cost?** Yes, and here it's small: the three tool
+schemas measure **~1,200 tokens per turn** while flatten-mcp is connected. A single flatten
 of a read-heavy session removes far more than that from **every** later turn — 135k in the
 demo — so it pays back the schema cost on the first flatten and many times over after. Want
 zero overhead in your main session? Run `/flatten` from a separate window (see the tip above).
@@ -146,7 +146,7 @@ After flatten — same words, only the bulk set aside:
 
    USER         "fix the crash"
    ASSISTANT    reading the logs…
-   TOOL_RESULT  [FLATTENED id=… → sidecar]   ← one marker; fetch the full dump on demand
+   TOOL_RESULT  [FLATTENED id=… → backup]    ← one marker; fetch the full dump on demand
    ASSISTANT    "the OOM is at line 88,402 — the fix is …"
 ```
 
@@ -154,10 +154,9 @@ After flatten — same words, only the bulk set aside:
 
 | Tool | What it does |
 | --- | --- |
-| `flatten_session` | Move bulky tool results into a sidecar, leaving `[FLATTENED …]` markers. Crash-safe and reversible. With no argument, flattens the current live session. Supports `dry_run`, `min_size`, and `include_tool_use_result`. |
+| `flatten_session` | Move bulky tool results into a backup copy, leaving `[FLATTENED …]` markers. Crash-safe and reversible. With no argument, flattens the current live session. Supports `dry_run`, `min_size`, and `include_tool_use_result`. |
 | `retrieve_flattened` | Fetch one original block back by its id — returns the original text, or re-renders a flattened screenshot as a real image. |
-| `unflatten_session` | Reverse a flatten completely: re-inline every block from the sidecar, restoring each flattened result to its exact original value. |
-| `prune_flatten_artifacts` | Reclaim disk by deleting leftover `.bak` / `.tmp` files (and, opt-in, sidecars). Defaults to a safe dry run. |
+| `unflatten_session` | Reverse a flatten completely: re-inline every block from the backup, then delete the backup so a fully restored session leaves nothing behind. |
 
 When a session is flattened, the model sees compact markers like this in place of the original output:
 
@@ -222,13 +221,14 @@ tools are the *Claude Code adapter* over the same block logic.
 
 ## How it works
 
-- **Sidecar, not deletion.** Each extracted block is written verbatim to `<session>.flat.jsonl` next to the session. The original session file is backed up **once** to `<session>.jsonl.bak` before the first rewrite.
-- **Crash-safe.** Originals are persisted to the sidecar *before* they're removed from the session, and the session is rewritten via an atomic temp-file-and-`rename`, so an interrupted run can never leave a half-written, irreplaceable session file.
-- **Idempotent.** Re-running flatten skips already-flattened blocks and never double-writes a sidecar entry.
+- **One backup, not deletion.** flatten keeps a single artifact next to the session: `<session>.jsonl.bak`, holding the **complete session, fully inlined** — every original block in place, as if you'd never flattened. The live `<session>.jsonl` carries the lightweight markers. The two are kept in lockstep on every run (`backup = unflatten(live)`, `live = flatten(backup)`).
+- **Crash-safe.** The complete originals are written to the backup *before* the bulk is removed from the session, each via an atomic temp-file-and-`rename`, so an interrupted run can never leave a half-written, irreplaceable session file — the live markers always resolve against the backup.
+- **Self-cleaning.** `unflatten_session` re-inlines the live file from the backup and then **deletes the backup**, so a fully restored session leaves zero artifacts behind. There is no sidecar and no pre-unflatten snapshot to mop up.
+- **Live re-flatten.** Re-running as the session grows only touches newly-arrived bulk; the backup is rebuilt each time to stay the complete inlined session, so every block — old or new — stays retrievable, and content added *after* a flatten is never lost on restore.
 - **Lossless & reversible.** Text and base64 images are stored exactly as they appeared, so `unflatten_session` restores each flattened block to its exact original value (byte-identical for Claude Code's canonical JSON). Your prompts and untouched lines were never altered to begin with.
 - **Disk vs. context tokens.** Claude Code stores each tool result twice on disk (once in the API message, once in a `toolUseResult` mirror) and only one copy is ever sent to the model. flatten reports both `diskBytesSaved` (affects `--resume` parse speed) and `contextTokensSaved` out of `contextTokensTotal` (the number that actually matters for the context window and compaction) — they differ a lot, and the tool is explicit about which is which.
 
-See [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/docs/ARCHITECTURE.md) for the session JSONL format, the sidecar schema, and the marker protocol.
+See [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/docs/ARCHITECTURE.md) for the session JSONL format, the backup model, and the marker protocol.
 
 ### Validate the claims yourself
 
@@ -237,7 +237,7 @@ Every number flatten reports can be checked end to end in a couple of minutes:
 1. Pick a meaty session — or make one: have Claude read a few large files.
 2. Ask for a **dry run** — *"dry-run flatten this session"* — and read the report: `flattenedCount`, `contextTokensSaved` of `contextTokensTotal`, `diskBytesSaved`. Nothing has been written yet.
 3. Run `/flatten` for real, then `/resume` the session and send any prompt — the context indicator drops by roughly the reported amount (exactly, when `ANTHROPIC_API_KEY` is set).
-4. Check reversibility: ask to **unflatten** the session, then diff the restored `.jsonl` against the `.jsonl.bak` backup created at flatten time — identical for Claude Code's canonical JSON.
+4. Check reversibility: while flattened, the `<session>.jsonl.bak` backup is the complete original — diff it against a copy of your pre-flatten session if you kept one. Then ask to **unflatten**: every block is restored to its exact original value (byte-identical for Claude Code's canonical JSON), and the backup is removed once the restore is clean.
 
 ## Security & verification
 
@@ -249,10 +249,10 @@ has just two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npm
 - **File access.** Every read and write is confined to Claude Code's session store, `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched.
 - **Network.** Zero network calls by default. When `ANTHROPIC_API_KEY` is set, exactly one endpoint is contacted: `POST https://api.anthropic.com/v1/messages/count_tokens` (free) to report exact token savings. The request body is the content being flattened — the same tool output and screenshots Anthropic already processed in the session — sent only to Anthropic for counting. The key is read from the environment, sent only as the auth header, and never stored or logged. There is no other URL in the codebase.
 - **No telemetry, no shell, no hooks.** No analytics, no usage tracking, no phone-home. The server spawns no processes, executes no shell commands, installs no hooks, and needs no permission bypasses.
-- **Safe defaults.** Every rewrite is backed up once and applied atomically — an interrupted run can't corrupt the session — and `prune_flatten_artifacts` defaults to a dry run.
+- **Safe defaults.** Every rewrite is backed up first and applied atomically — an interrupted run can't corrupt the session — and a **dry run** previews exactly what `flatten` would change before anything is written.
 
-**Verifying a build before you trust it.** Pin an exact version (`npx -y flatten-mcp@1.1.0`)
-rather than `@latest`, inspect the published tarball (`npm view flatten-mcp@1.1.0 dist.tarball`,
+**Verifying a build before you trust it.** Pin an exact version (`npx -y flatten-mcp@2.0.0`)
+rather than `@latest`, inspect the published tarball (`npm view flatten-mcp@2.0.0 dist.tarball`,
 or `npm pack` and read it — it's `dist/` plus this README and the license), and the committed
 `package-lock.json` pins the full dependency tree. The source is small enough to audit in one
 sitting. (Cryptographic publish provenance and signed tags aren't wired up yet — for now,
@@ -308,7 +308,7 @@ claude mcp remove flatten -s user       # unregister the server
 rm -f ~/.claude/commands/flatten.md     # remove the /flatten command, if installed
 ```
 
-Flatten artifacts (`.flat.jsonl` sidecars, `.bak` backups) live next to your session files and are not deleted by uninstalling. To reclaim the disk, run `prune_flatten_artifacts` (with `include_sidecars: true`) **before** unregistering — or delete them manually from `~/.claude/projects/<encoded-project-dir>/`. Mind that flattened sessions need their sidecar for `retrieve_flattened` / `unflatten_session` — unflatten first if you want the bulk back inline.
+A `<session>.jsonl.bak` backup lives next to each flattened session and is **not** removed by uninstalling — only by `unflatten_session`, which restores the bulk inline and then deletes it. To reclaim disk for sessions you won't restore, delete the `.jsonl.bak` files manually from `~/.claude/projects/<encoded-project-dir>/`. Mind that a flattened session needs its backup for `retrieve_flattened` / `unflatten_session` — unflatten first if you want the bulk back inline.
 
 ## Contributing
 

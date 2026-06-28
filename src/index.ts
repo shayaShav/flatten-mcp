@@ -4,7 +4,6 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import * as path from 'path';
 import * as os from 'os';
-import * as fs from 'fs/promises';
 
 import {
     getSessionDir,
@@ -47,14 +46,14 @@ function resolveClaudeDir(claudeDir?: string): string | undefined {
 
 const server = new McpServer({
     name: 'flatten-mcp',
-    version: '1.1.0',
+    version: '2.0.0',
 });
 
 // ─── Tool 1: flatten_session ────────────────────────────────────────
 
 server.tool(
     'flatten_session',
-    'Flatten a Claude Code session: move bulky tool results (large text output and base64 image/screenshot blocks) out of the session JSONL into a sidecar, leaving a compact [FLATTENED ...] marker. The conversation reads identically — every prompt and event stays verbatim — but resumes with far fewer context tokens. Crash-safe (atomic rewrite + one-time backup) and reversible via unflatten_session. Reports diskBytesSaved and contextTokensSaved out of contextTokensTotal (estimated locally, or exact when ANTHROPIC_API_KEY is set). With no session_id, flattens the current live session; also accepts a UUID, "last", "last N", or "current". After flattening, /resume the session to load the lighter copy.',
+    'Flatten a Claude Code session: move bulky tool results (large text output and base64 image/screenshot blocks) out of the session JSONL into a backup copy, leaving a compact [FLATTENED ...] marker. The conversation reads identically — every prompt and event stays verbatim — but resumes with far fewer context tokens. Crash-safe (atomic rewrite + a single backup holding the complete session) and reversible via unflatten_session. Reports diskBytesSaved and contextTokensSaved out of contextTokensTotal (estimated locally, or exact when ANTHROPIC_API_KEY is set). With no session_id, flattens the current live session; also accepts a UUID, "last", "last N", or "current". After flattening, /resume the session to load the lighter copy.',
     {
         session_id: z.string().optional().describe('Session UUID, "last", "last N", or "current". Omit to flatten the current live session.'),
         sessionId: z.string().optional().describe('camelCase alias for session_id (accepted so a camelCase call does not fail validation).'),
@@ -101,7 +100,6 @@ server.tool(
                 contextTokensExact: result.contextTokensExact,
                 originalSize: result.originalSize,
                 newSize: result.newSize,
-                sidecarPath: result.sidecarPath,
                 backupPath: result.backupPath,
                 entries: result.entries,
                 // The live-write reminder: a flattened session only takes effect once
@@ -126,7 +124,7 @@ server.tool(
 
 server.tool(
     'retrieve_flattened',
-    'Retrieve original tool result content from a flattened session. When you see [FLATTENED id=XXX tool=Read ... | text NNNB/NNL | session=YYY | ...] in the conversation, call this with the value after "id=" as tool_use_id and the value after "session=" as session_id. Returns the original text output, or — for flattened screenshots — the actual image so you can view it again.',
+    'Retrieve original tool result content from a flattened session, read straight from its backup. When you see [FLATTENED id=XXX tool=Read ... | text NNNB/NNL | session=YYY | ...] in the conversation, call this with the value after "id=" as tool_use_id and the value after "session=" as session_id. Returns the original text output, or — for flattened screenshots — the actual image so you can view it again.',
     {
         tool_use_id: z.string().describe('Value after "id=" in the [FLATTENED id=XXX ...] marker'),
         session_id: z.string().describe('Value after "session=" in the [FLATTENED ... session=YYY ...] marker'),
@@ -137,10 +135,10 @@ server.tool(
         const projectDir = resolveProjectDir(project_dir);
         const claudeDir = resolveClaudeDir(claude_dir);
         const sessionDir = getSessionDir(projectDir, claudeDir);
-        const sidecarPath = path.join(sessionDir, `${session_id}.flat.jsonl`);
+        const backupPath = path.join(sessionDir, `${session_id}.jsonl.bak`);
 
         try {
-            const result = await retrieveFlattened(sidecarPath, tool_use_id);
+            const result = await retrieveFlattened(backupPath, tool_use_id);
 
             const header = JSON.stringify({
                 tool_use_id: result.tool_use_id,
@@ -206,7 +204,7 @@ server.tool(
 
 server.tool(
     'unflatten_session',
-    'Reverse a flatten: re-inline every flattened tool result (text and images) back into the session JSONL from its sidecar, restoring the session to its pre-flatten state. Snapshots the flattened file to <file>.preunflatten.bak first.',
+    'Reverse a flatten: re-inline every flattened tool result (text and images) back into the session JSONL from the backup, restoring the session to its pre-flatten state, then delete the backup so nothing is left behind.',
     {
         session_id: z.string().describe('Session UUID, "last", or "current" (the live session)'),
         project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
@@ -224,8 +222,8 @@ server.tool(
 
         const sid = sessionIds[0];
         const filePath = path.join(sessionDir, `${sid}.jsonl`);
-        const sidecarPath = path.join(sessionDir, `${sid}.flat.jsonl`);
-        const result = await unflattenSession(filePath, sidecarPath);
+        const backupPath = path.join(sessionDir, `${sid}.jsonl.bak`);
+        const result = await unflattenSession(filePath, backupPath);
 
         return {
             content: [{
@@ -238,68 +236,6 @@ server.tool(
                     originalSize: result.originalSize,
                     newSize: result.newSize,
                     backupPath: result.backupPath,
-                }, null, 2),
-            }],
-        };
-    }
-);
-
-// ─── Tool 4: prune_flatten_artifacts ────────────────────────────────
-
-server.tool(
-    'prune_flatten_artifacts',
-    'Reclaim disk by deleting leftover flatten artifacts (.bak, .preunflatten.bak, and stale .tmp-<pid> files) for a project. By default keeps .flat.jsonl sidecars (retrieve_flattened needs them) and runs dry. Set include_sidecars=true only when you no longer need to retrieve/unflatten those sessions.',
-    {
-        project_dir: z.string().optional().describe('Absolute path to project. Default: the project the CLI runs in (cwd)'),
-        claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
-        older_than_days: z.number().optional().default(0).describe('Only delete artifacts whose mtime is older than N days. 0 = no age limit.'),
-        include_sidecars: z.boolean().optional().default(false).describe('Also delete .flat.jsonl sidecars. WARNING: retrieve_flattened/unflatten_session stop working for those sessions.'),
-        dry_run: z.boolean().optional().default(true).describe('Report what would be deleted without deleting. Default true for safety.'),
-    },
-    async ({ project_dir, claude_dir, older_than_days, include_sidecars, dry_run }) => {
-        const projectDir = resolveProjectDir(project_dir);
-        const claudeDir = resolveClaudeDir(claude_dir);
-        const sessionDir = getSessionDir(projectDir, claudeDir);
-
-        let entries: string[];
-        try {
-            entries = await fs.readdir(sessionDir);
-        } catch {
-            return { content: [{ type: 'text' as const, text: `No session directory at ${sessionDir}` }] };
-        }
-
-        const isArtifact = (name: string): boolean =>
-            name.endsWith('.bak') ||
-            /\.tmp-\d+$/.test(name) ||
-            (include_sidecars && name.endsWith('.flat.jsonl'));
-
-        const cutoffMs = older_than_days > 0 ? Date.now() - older_than_days * 86_400_000 : Infinity;
-
-        const deleted: Array<{ file: string; bytes: number }> = [];
-        let bytesFreed = 0;
-
-        for (const name of entries) {
-            if (!isArtifact(name)) continue;
-            const filePath = path.join(sessionDir, name);
-            const stat = await fs.stat(filePath);
-            if (older_than_days > 0 && stat.mtimeMs > cutoffMs) continue;
-            deleted.push({ file: name, bytes: stat.size });
-            bytesFreed += stat.size;
-            if (!dry_run) await fs.unlink(filePath);
-        }
-
-        return {
-            content: [{
-                type: 'text' as const,
-                text: JSON.stringify({
-                    dryRun: dry_run,
-                    sessionDir,
-                    includeSidecars: include_sidecars,
-                    olderThanDays: older_than_days,
-                    fileCount: deleted.length,
-                    bytesFreed,
-                    mbFreed: (bytesFreed / (1024 * 1024)).toFixed(2),
-                    files: deleted,
                 }, null, 2),
             }],
         };
