@@ -164,6 +164,39 @@ When a session is flattened, the model sees compact markers like this in place o
 
 Everything the model needs to fetch the original — the id and the session — is right there in the marker.
 
+## CLI — flatten a Claude Code session from the terminal (no LLM turn)
+
+Want to flatten the *same Claude Code sessions* the MCP tools operate on, but from a shell —
+a script, a cron job, or another window — without an LLM turn and **without spending any
+tokens**? `flatten-mcp-session` drives the exact same on-disk engine as the MCP server, so its
+behavior matches the `flatten_session` / `unflatten_session` / `retrieve_flattened` tools.
+(This is the disk counterpart to `flatten-mcp-cli` below, which never touches your session
+store.)
+
+```bash
+# Flatten the most-recent session in this project (or pass a UUID / "last" / "current"):
+npx flatten-mcp-session flatten
+npx flatten-mcp-session flatten <session> --dry-run          # preview, write nothing
+npx flatten-mcp-session flatten <session> --min-size 2000
+
+# List this project's sessions (newest first), reverse a flatten, or fetch one block back:
+npx flatten-mcp-session list
+npx flatten-mcp-session unflatten <session>
+npx flatten-mcp-session retrieve  <session> <tool_use_id> --out shot.png
+```
+
+- `<session>` accepts a UUID, `last`, `last N`, `current`, or a keyword — the same grammar as
+  the MCP tool. `flatten` defaults to `current` (the most-recent session when run outside
+  Claude Code).
+- Shared options: `--project-dir <abs>` (default: the directory you run in), `--claude-dir
+  <dir>` (default: `$CLAUDE_CONFIG_DIR` or `~/.claude`), and `--json` for machine output.
+- `retrieve` prints text to stdout (header on stderr, so pipes stay clean) and writes image
+  blocks to a file — a terminal can't render base64.
+
+Flattening needs no model intelligence — it's pure file surgery — so the terminal path costs
+nothing and is ideal for automation. After a real flatten, `/resume` the session in Claude
+Code (switch away and back) to load the lighter copy.
+
 ## CLI — flatten a Messages API conversation from any language
 
 Not in Claude Code? `flatten-mcp-cli` runs the same engine over **stdin/stdout**, so a caller
@@ -239,12 +272,12 @@ Every number flatten reports can be checked end to end in a couple of minutes:
 
 ## Security & verification
 
-The server is five small TypeScript files; the shared engine, the library export, and the
-`flatten-mcp-cli` bin add a few more, all over the same `src/core.ts` — and the whole thing
+The server is a handful of small TypeScript files; the shared engine, the library export, and
+the `flatten-mcp-cli` and `flatten-mcp-session` bins add a few more — and the whole thing
 has just two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk),
 [`zod`](https://www.npmjs.com/package/zod)). It's a quick read.
 
-- **File access.** Every read and write is confined to Claude Code's session store, `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched.
+- **File access.** Every read and write is confined to Claude Code's session store, `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/`. Rewriting session `.jsonl` files there is the tool's entire job, and each rewrite is backed up once and applied atomically (see [How it works](#how-it-works)). Nothing else on disk is ever touched — the one exception is `flatten-mcp-session retrieve`, which writes a retrieved image to the output path you pass it (a terminal can't render base64), and only then.
 - **Network.** Zero network calls by default. When `ANTHROPIC_API_KEY` is set, exactly one endpoint is contacted: `POST https://api.anthropic.com/v1/messages/count_tokens` (free) to report exact token savings. The request body is the content being flattened — the same tool output and screenshots Anthropic already processed in the session — sent only to Anthropic for counting. The key is read from the environment, sent only as the auth header, and never stored or logged. There is no other URL in the codebase.
 - **No telemetry, no shell, no hooks.** No analytics, no usage tracking, no phone-home. The server spawns no processes, executes no shell commands, installs no hooks, and needs no permission bypasses.
 - **Safe defaults.** Every rewrite is backed up first and applied atomically — an interrupted run can't corrupt the session — and a **dry run** previews exactly what `flatten` would change before anything is written.

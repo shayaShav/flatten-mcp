@@ -23,6 +23,32 @@ export function getSessionDir(projectDir: string, claudeDir?: string): string {
     return path.join(claudeDir || defaultClaudeDir(), 'projects', encodeProjectDir(projectDir));
 }
 
+// Resolve the project dir to operate on. Defaults to the process cwd — Claude Code
+// spawns the stdio server with cwd set to the workspace root, and the CLI runs in the
+// project you invoke it from. Relative segments like ".." would escape the per-project
+// session dir after encodeProjectDir, so only absolute paths are accepted.
+export function resolveProjectDir(projectDir?: string): string {
+    if (projectDir && !path.isAbsolute(projectDir)) {
+        throw new Error(`project_dir must be an absolute path, got: ${projectDir}`);
+    }
+    return projectDir || process.cwd();
+}
+
+// Resolve the Claude config dir (the one holding projects/), e.g. ~/.claude-2, so a
+// caller in one profile can target another profile's session store. undefined → the
+// session-store falls back to $CLAUDE_CONFIG_DIR or ~/.claude. A leading "~/" is
+// expanded for ergonomics, matching how profiles are named.
+export function resolveClaudeDir(claudeDir?: string): string | undefined {
+    if (!claudeDir) return undefined;
+    const dir = claudeDir === '~' || claudeDir.startsWith('~/')
+        ? path.join(os.homedir(), claudeDir.slice(1))
+        : claudeDir;
+    if (!path.isAbsolute(dir)) {
+        throw new Error(`claude_dir must be an absolute path (or start with ~/), got: ${claudeDir}`);
+    }
+    return dir;
+}
+
 async function streamJsonlLines(
     filePath: string,
     callback: (parsed: Record<string, unknown>, lineNumber: number) => boolean | void
@@ -167,4 +193,13 @@ export async function resolveSessionId(
         s.gitBranch.toLowerCase().includes(keyword)
     );
     return matched.map(s => s.sessionId);
+}
+
+// Public listing of a project's sessions, newest first — used by the session CLI's
+// `list` command so a terminal caller can discover session ids and recency without
+// the MCP server. Counts messages by default (the full per-session scan).
+export async function listSessions(sessionDir: string): Promise<SessionMeta[]> {
+    const sessions = await listSessionFiles(sessionDir);
+    sessions.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return sessions;
 }
