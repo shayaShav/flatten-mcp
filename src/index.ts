@@ -3,11 +3,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import * as path from 'path';
-import * as os from 'os';
 
 import {
     getSessionDir,
     resolveSessionId,
+    resolveProjectDir,
+    resolveClaudeDir,
 } from './session-store.js';
 
 import {
@@ -16,33 +17,6 @@ import {
     retrieveFlattened,
 } from './flattener.js';
 import type { ContentBlock } from './types.js';
-
-function resolveProjectDir(projectDir?: string): string {
-    // Default to the project the CLI runs in. Claude Code spawns this stdio
-    // server with cwd set to the workspace root, so process.cwd() IS that dir.
-    // Pass project_dir explicitly to target a different project.
-    // Relative segments like ".." would escape the per-project session dir
-    // after encodeProjectDir, so only absolute paths are accepted.
-    if (projectDir && !path.isAbsolute(projectDir)) {
-        throw new Error(`project_dir must be an absolute path, got: ${projectDir}`);
-    }
-    return projectDir || process.cwd();
-}
-
-function resolveClaudeDir(claudeDir?: string): string | undefined {
-    // undefined → session-store falls back to $CLAUDE_CONFIG_DIR or ~/.claude.
-    // Accepts the Claude config dir (the one holding projects/), e.g. ~/.claude-2,
-    // so a session in one profile can target another profile's session store.
-    if (!claudeDir) return undefined;
-    // Expand a leading "~/" for ergonomics, matching how profiles are named (~/.claude-2).
-    const dir = claudeDir === '~' || claudeDir.startsWith('~/')
-        ? path.join(os.homedir(), claudeDir.slice(1))
-        : claudeDir;
-    if (!path.isAbsolute(dir)) {
-        throw new Error(`claude_dir must be an absolute path (or start with ~/), got: ${claudeDir}`);
-    }
-    return dir;
-}
 
 const server = new McpServer({
     name: 'flatten-mcp',
