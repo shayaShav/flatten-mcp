@@ -17,9 +17,11 @@
   <a href="https://smithery.ai/server/@shaya-shaviv/flatten-mcp"><img alt="Smithery calls" src="https://smithery.ai/badge/@shaya-shaviv/flatten-mcp"></a>
 </p>
 
-<p align="center"><b>317,236 → 182,287 tokens — a 43% lighter session, every line of history intact.</b></p>
+<p align="center"><b>340,071 → 132,800 tokens — a 61% lighter session, every line of history intact.</b></p>
 
-https://github.com/user-attachments/assets/4672b3cd-f78f-4146-97ba-e0077b655381
+<p align="center">
+  <img src="https://raw.githubusercontent.com/shayaShav/flatten-mcp/main/assets/flatten-demo.gif" alt="Demo: a 340,071-token Claude Code session is flattened, /resume'd, and comes back 61% lighter at 132,800 tokens — history verbatim" width="820">
+</p>
 
 Most of a long session's tokens are **bulk the model already distilled into prose** — the
 2 MB log it boiled down to one line, the screenshot it described, the five files it
@@ -113,14 +115,14 @@ To preview without touching anything, ask for a **dry run** first. To undo, ask 
 
 The reduction depends entirely on what the session did — it's the bulk you remove, not a fixed percentage:
 
-- **Read-heavy sessions** (large files, long logs, or screenshots in context) — the demo above went **317,236 → 182,287 tokens, a 43% cut**. The more of your context is ingested bulk, the bigger the cut; sessions dominated by base64 screenshots can go higher.
+- **Read-heavy sessions** (large files, long logs, or screenshots in context) — the demo above went **340,071 → 132,800 tokens, a 61% cut** (the in-terminal report in the recording shows the tool's conservative local estimate; the status bar shows the real measured drop). The more of your context is ingested bulk, the bigger the cut; sessions dominated by base64 screenshots can go higher.
 - **Prose-heavy sessions** (little external data ingested) — savings are small. There's simply not much bulk to move.
 
-**When to reach for it.** A common point is around **200k** tokens; for critical sessions where you want the model at its sharpest, flattening around **250k–400k** is where the most dramatic cuts show up. Flatten the same way you wouldn't compact mid-way through a large reading task — though nothing is ever lost, so flattening everything and cherry-picking the few blocks you still need is a perfectly legitimate strategy.
+**When to reach for it.** A common point is around **200k** tokens; for critical sessions where you want the model at its sharpest, flattening around **250k–400k** is where the most dramatic cuts show up. And it's repeatable: as the session keeps growing, run it again — a re-flatten only touches the bulk that arrived since the last one. Flatten the same way you wouldn't compact mid-way through a large reading task — though nothing is ever lost, so flattening everything and cherry-picking the few blocks you still need is a perfectly legitimate strategy.
 
 **Doesn't an MCP server add its own context cost?** Yes, and here it's small: the three tool
 schemas measure **~1,200 tokens per turn** while flatten-mcp is connected. A single flatten
-of a read-heavy session removes far more than that from **every** later turn — 135k in the
+of a read-heavy session removes far more than that from **every** later turn — 207k in the
 demo — so it pays back the schema cost on the first flatten and many times over after. Want
 zero overhead in your main session? Run `/flatten` from a separate window (see the tip above).
 
@@ -190,6 +192,8 @@ npx flatten-mcp-session retrieve  <session> <tool_use_id> --out shot.png
   Claude Code).
 - Shared options: `--project-dir <abs>` (default: the directory you run in), `--claude-dir
   <dir>` (default: `$CLAUDE_CONFIG_DIR` or `~/.claude`), and `--json` for machine output.
+  `flatten` also takes `--no-tool-use-result` to leave the disk-only `toolUseResult` mirror
+  untouched (the `include_tool_use_result: false` equivalent).
 - `retrieve` prints text to stdout (header on stderr, so pipes stay clean) and writes image
   blocks to a file — a terminal can't render base64.
 
@@ -212,7 +216,7 @@ npx flatten-mcp-cli --flatten --min-size 2000 < body.json > flattened.json
 npx flatten-mcp-cli --unflatten < flattened.json > restored.json
 ```
 
-- `--flatten` prints `{ messages, extracted, flattenedCount, imageBlocksFlattened, contextTokensSaved }`. **Persist `extracted` yourself — you are the store.**
+- `--flatten` prints `{ messages, extracted, flattenedCount, imageBlocksFlattened, contextTokensSaved, contextTokensExact }` (`contextTokensExact` is always `false` here — the CLI never makes a network call). **Persist `extracted` yourself — you are the store.**
 - `--unflatten` prints `{ messages }`, restored byte-for-byte from the `--flatten` output (extra keys ignored).
 - `--min-size N` overrides the 1000-byte default (the flag wins over an inline `minSize`).
 - Bad usage or bad JSON → a message on stderr and exit code 1.

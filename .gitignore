@@ -6,6 +6,7 @@ dist/
 .DS_Store
 .vscode/
 .playwright-mcp/
+.env
 
 # Local-only AI context — not public
 /CLAUDE.md
