@@ -49,7 +49,7 @@ One command — installs from [npm](https://www.npmjs.com/package/flatten-mcp) a
 claude mcp add flatten -s user -- npx -y flatten-mcp@latest
 ```
 
-Prefer to vet upgrades yourself? Pin an exact version: `npx -y flatten-mcp@2.0.1`.
+Prefer to vet upgrades yourself? Pin an exact version: `npx -y flatten-mcp@2.0.2`.
 
 Or register it manually (in `~/.claude.json`, or your project's `.mcp.json`):
 
@@ -286,8 +286,8 @@ has just two runtime dependencies ([`@modelcontextprotocol/sdk`](https://www.npm
 - **No telemetry, no shell, no hooks.** No analytics, no usage tracking, no phone-home. The server spawns no processes, executes no shell commands, installs no hooks, and needs no permission bypasses.
 - **Safe defaults.** Every rewrite is backed up first and applied atomically — an interrupted run can't corrupt the session — and a **dry run** previews exactly what `flatten` would change before anything is written.
 
-**Verifying a build before you trust it.** Pin an exact version (`npx -y flatten-mcp@2.0.1`)
-rather than `@latest`, inspect the published tarball (`npm view flatten-mcp@2.0.1 dist.tarball`,
+**Verifying a build before you trust it.** Pin an exact version (`npx -y flatten-mcp@2.0.2`)
+rather than `@latest`, inspect the published tarball (`npm view flatten-mcp@2.0.2 dist.tarball`,
 or `npm pack` and read it — it's `dist/` plus this README and the license), and the committed
 `package-lock.json` pins the full dependency tree. The source is small enough to audit in one
 sitting. (Cryptographic publish provenance and signed tags aren't wired up yet — for now,

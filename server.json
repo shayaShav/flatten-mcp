@@ -8,7 +8,7 @@
         "source": "github",
         "id": "1266659149"
     },
-    "version": "2.0.1",
+    "version": "2.0.2",
     "websiteUrl": "https://github.com/shayaShav/flatten-mcp#readme",
     "icons": [
         {
@@ -24,7 +24,7 @@
             "registryType": "npm",
             "registryBaseUrl": "https://registry.npmjs.org",
             "identifier": "flatten-mcp",
-            "version": "2.0.1",
+            "version": "2.0.2",
             "transport": {
                 "type": "stdio"
             },
