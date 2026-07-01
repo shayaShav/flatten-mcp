@@ -7,9 +7,15 @@ This document describes the on-disk formats flatten-mcp operates on and the algo
 ```
 src/
   index.ts          MCP server — registers the 3 tools, validates input, formats output
-  flattener.ts      flatten / unflatten / retrieve engine — the JSONL surgery
-  session-store.ts  session discovery and id resolution
+  flattener.ts      disk flatten / unflatten / retrieve engine — the JSONL surgery
+  session-store.ts  session discovery, id resolution, project/claude-dir resolution
   types.ts          shared interfaces for the session JSONL shape
+  core.ts           shared core — marker protocol, classification, token estimation;
+                    also the in-memory flatten API over raw Messages API messages[]
+  lib.ts            package entry — re-exports the in-memory API (never imports index.ts)
+  cli.ts            flatten-mcp-cli bin — stdin/stdout wrapper over the in-memory engine
+  cli-core.ts       pure argv+stdin → stdout logic behind cli.ts (unit-testable)
+  session-cli.ts    flatten-mcp-session bin — terminal CLI over the same disk engine
 ```
 
 The server speaks MCP over stdio (`@modelcontextprotocol/sdk`) and has no network dependencies except an **optional** call to Anthropic's `count_tokens` endpoint for exact token accounting.
