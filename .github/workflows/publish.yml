@@ -1,0 +1,49 @@
+name: Publish to npm
+
+on:
+    push:
+        tags: ['v*']
+    workflow_dispatch:
+
+# OIDC trusted publishing: npm validates this workflow's identity token against the
+# Trusted Publisher configured on npmjs.com (shayaShav/flatten-mcp, publish.yml).
+# No NPM_TOKEN exists anywhere; provenance attestations are generated automatically.
+permissions:
+    contents: read
+    id-token: write
+
+concurrency:
+    group: publish-npm
+    cancel-in-progress: false
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: '24'
+                  registry-url: 'https://registry.npmjs.org'
+                  package-manager-cache: false
+            - name: Assert npm supports trusted publishing (>= 11.5.1)
+              run: |
+                  node --version
+                  NPMV=$(npm --version)
+                  echo "npm $NPMV"
+                  if [ "$(printf '%s\n' 11.5.1 "$NPMV" | sort -V | head -1)" != "11.5.1" ]; then
+                      echo "::error::npm $NPMV is below the 11.5.1 trusted-publishing floor"
+                      exit 1
+                  fi
+            - run: npm ci
+            - run: npm run build
+            - name: Verify tag matches package.json version
+              if: github.ref_type == 'tag'
+              run: |
+                  PKG="v$(node -p "require('./package.json').version")"
+                  if [ "$PKG" != "$GITHUB_REF_NAME" ]; then
+                      echo "::error::Tag $GITHUB_REF_NAME does not match package.json version ($PKG)"
+                      exit 1
+                  fi
+            - name: Publish to npm (provenance auto-generated via trusted publishing)
+              run: npm publish
