@@ -1,6 +1,6 @@
 {
     "name": "flatten-mcp",
-    "version": "2.0.4",
+    "version": "2.0.5",
     "mcpName": "io.github.shayaShav/flatten-mcp",
     "description": "Cut a Claude Code session's context tokens losslessly: bulky tool output moves to a local backup, every prompt stays verbatim, and the session resumes lighter — the reversible alternative to /compact. Ships a terminal CLI and an in-memory library for raw Messages API conversations.",
     "type": "module",
