@@ -16,9 +16,13 @@ src/
   cli.ts            flatten-mcp-cli bin — stdin/stdout wrapper over the in-memory engine
   cli-core.ts       pure argv+stdin → stdout logic behind cli.ts (unit-testable)
   session-cli.ts    flatten-mcp-session bin — terminal CLI over the same disk engine
+  inmemory-tools.ts MCP registrar for flatten_messages/unflatten_messages (in-memory engine)
+  http.ts           flatten-mcp-http bin — argv/lifecycle wiring for the HTTP entry
+  http-core.ts      Streamable HTTP server over the in-memory tools (stateless, unit-testable)
+  version.ts        single in-code source for the package version
 ```
 
-The server speaks MCP over stdio (`@modelcontextprotocol/sdk`) and has no network dependencies except an **optional** call to Anthropic's `count_tokens` endpoint for exact token accounting.
+The server speaks MCP over stdio (`@modelcontextprotocol/sdk`) and makes no outbound network call except an **opt-in** one to Anthropic's `count_tokens` endpoint for exact token accounting (`FLATTEN_COUNT_EXACT=1` plus `ANTHROPIC_API_KEY` — key presence alone does not trigger it). The `flatten-mcp-http` bin serves the in-memory tools over Streamable HTTP (inbound only, stateless); the disk tools are never exposed over HTTP because they operate on the local session store.
 
 ## Session storage
 
@@ -84,7 +88,7 @@ The id and session id each appear **once**; the retrieval instructions live in t
 1. Read the whole session file; split into lines.
 2. Build the `tool_use_id → {name,input}` map from assistant lines.
 3. For each `user` line, for every `tool_result` block larger than `min_size`: record the original, swap in a marker. Repeat for the `toolUseResult` mirror when enabled. Lines already carrying a marker are skipped, so a re-run only touches newly-arrived bulk and the reported metrics stay per-operation.
-4. Track context tokens from the latest assistant turn's `message.usage` (`input + cache_read + cache_creation`) as the real context total; estimate tokens removed locally, or upgrade to an exact `count_tokens` result when `ANTHROPIC_API_KEY` is set.
+4. Track context tokens from the latest assistant turn's `message.usage` (`input + cache_read + cache_creation`) as the real context total; estimate tokens removed locally, or upgrade to an exact `count_tokens` result when `FLATTEN_COUNT_EXACT=1` and `ANTHROPIC_API_KEY` are both set.
 5. Rebuild the backup as the complete inlined session — `inlineLines` resolves the markers already in the live file against the prior backup; bulk added since the last flatten is still inline and passes through. On the first flatten the backup is the verbatim pristine original.
 6. **Write order is chosen for crash-safety** (see below).
 
@@ -104,7 +108,7 @@ Builds an `id → original` map from the backup (`harvestOriginals`), then re-in
 | Constant | Value | Note |
 | --- | --- | --- |
 | `TEXT_BYTES_PER_TOKEN` | 3.5 | Claude tokenizer ≈ 3.3–3.7 B/token for English/code. |
-| `IMAGE_TOKEN_EST` | 1500 | Typical screenshot tile cost; exact via `count_tokens` when keyed. |
+| `IMAGE_TOKEN_EST` | 1500 | Typical screenshot tile cost; exact via `count_tokens` when opted in. |
 
 Only `slot: "content"` removals reduce what the model sees, so only they count toward `contextTokensSaved`. The `toolUseResult` mirror contributes to `diskBytesSaved` only.
 

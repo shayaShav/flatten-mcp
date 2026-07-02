@@ -39,6 +39,15 @@ TypeScript files with two direct dependencies — small enough to audit in one s
 | You choose when? | you or the auto-cliff | automatic | yes |
 | Session file on disk | rewritten | unchanged | shrinks; the backup keeps every original |
 
+**Taste it first — nothing installed, nothing written:**
+
+```bash
+npx -y -p flatten-mcp flatten-mcp-session flatten --dry-run
+```
+
+Run it from a project you use Claude Code in: it prints the exact savings a flatten
+would give your most recent session and writes nothing.
+
 ## Quick start
 
 Runs through `npx` — no global install, nothing added to your project. Every read/write
@@ -152,7 +161,8 @@ the original:
   `unflatten_session` restores byte-identical values.
 - **Honest numbers.** Claude Code stores each tool result twice on disk but sends one to
   the model; reports separate `diskBytesSaved` from `contextTokensSaved` (the number that
-  matters), estimated locally or exact via `count_tokens` when `ANTHROPIC_API_KEY` is set.
+  matters), estimated locally — or exact via `count_tokens` when you opt in with
+  `FLATTEN_COUNT_EXACT=1` (plus `ANTHROPIC_API_KEY`).
 
 Details — session JSONL format, backup model, marker protocol — in
 [docs/ARCHITECTURE.md](https://github.com/shayaShav/flatten-mcp/blob/main/docs/ARCHITECTURE.md).
@@ -174,29 +184,34 @@ then unflatten and confirm the restore is byte-identical.
   `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<encoded-project-dir>/` — rewriting session
   files there is the tool's entire job, always backup-first and atomic. The one exception:
   `flatten-mcp-session retrieve --out` writes a retrieved image where you tell it to.
-- **Network.** Zero calls by default. With `ANTHROPIC_API_KEY` set, exactly one endpoint
-  is ever contacted — `POST api.anthropic.com/v1/messages/count_tokens` (free) — and the
-  request body is the content being flattened, sent only to Anthropic for exact savings
-  numbers. The key is read from the environment and never stored or logged. There is no
-  other URL in the codebase.
+- **Network.** Zero outbound calls unless you explicitly opt in to exact token counts.
+  With **both** `FLATTEN_COUNT_EXACT=1` and `ANTHROPIC_API_KEY` set — key presence alone
+  is not enough — exactly one endpoint is ever contacted:
+  `POST api.anthropic.com/v1/messages/count_tokens` (free). The request body contains the
+  counting model id (`FLATTEN_COUNT_MODEL`) and a single user message holding the tool
+  results being flattened, reduced to their text and image blocks; a second identical call
+  counts the replacement markers. Sent only to Anthropic; the key is read from the
+  environment and never stored or logged. There is no other outbound URL in the codebase.
+  The optional `flatten-mcp-http` bin (below) accepts *inbound* connections when you run
+  it — localhost by default — and makes no outbound calls.
 - **No telemetry, no shell, no hooks.** No analytics, no spawned processes, no permission
   bypasses. Vulnerability reports: [SECURITY.md](SECURITY.md).
 
 ## Beyond Claude Code — CLI & library
 
-The same engine ships as a terminal CLI and an in-memory library, so raw Messages API
-callers (any language) get the identical flatten/unflatten semantics with no MCP and no
-session files.
+The same engine ships as a terminal CLI, an in-memory library, and a Streamable HTTP
+server, so raw Messages API callers (any language) get the identical flatten/unflatten
+semantics with no MCP and no session files.
 
 <details>
 <summary><b><code>flatten-mcp-session</code> — flatten Claude Code sessions from the terminal (no LLM turn, zero tokens)</b></summary>
 
 ```bash
-npx flatten-mcp-session flatten                    # most-recent session in this project
-npx flatten-mcp-session flatten <session> --dry-run
-npx flatten-mcp-session list
-npx flatten-mcp-session unflatten <session>
-npx flatten-mcp-session retrieve <session> <tool_use_id> --out shot.png
+npx -y -p flatten-mcp flatten-mcp-session flatten                     # most-recent session in this project
+npx -y -p flatten-mcp flatten-mcp-session flatten <session> --dry-run
+npx -y -p flatten-mcp flatten-mcp-session list
+npx -y -p flatten-mcp flatten-mcp-session unflatten <session>
+npx -y -p flatten-mcp flatten-mcp-session retrieve <session> <tool_use_id> --out shot.png
 ```
 
 - `<session>`: UUID, `last`, `"last N"`, `current`, or a keyword — same grammar as the MCP
@@ -210,9 +225,9 @@ npx flatten-mcp-session retrieve <session> <tool_use_id> --out shot.png
 <summary><b><code>flatten-mcp-cli</code> — flatten a raw Messages API conversation over stdin/stdout</b></summary>
 
 ```bash
-echo '[{"role":"user","content":"hi"}]' | npx flatten-mcp-cli --flatten
-npx flatten-mcp-cli --flatten --min-size 2000 < body.json > flattened.json
-npx flatten-mcp-cli --unflatten < flattened.json > restored.json
+echo '[{"role":"user","content":"hi"}]' | npx -y -p flatten-mcp flatten-mcp-cli --flatten
+npx -y -p flatten-mcp flatten-mcp-cli --flatten --min-size 2000 < body.json > flattened.json
+npx -y -p flatten-mcp flatten-mcp-cli --unflatten < flattened.json > restored.json
 ```
 
 - `--flatten` prints `{ messages, extracted, flattenedCount, contextTokensSaved, … }` —
@@ -235,11 +250,34 @@ const original = unflattenMessages(messages, extracted);   // byte-for-byte rest
 - Synchronous, never mutates input (deep-copies first). `flattenRequestBody` /
   `unflattenRequestBody` handle a full `{ system, messages, tools, … }` body.
 - Exact token counts (optional, async): `flattenMessagesExact` uses Anthropic's free
-  `count_tokens` when `ANTHROPIC_API_KEY` is set — the only code path with a network call.
+  `count_tokens` when `ANTHROPIC_API_KEY` is set — calling the `*Exact` variant is the
+  opt-in here (`countExact: false` forces the estimate); the `FLATTEN_COUNT_EXACT`
+  variable gates only the MCP server and session CLI.
 - **Prompt-caching caveat:** flattening earlier messages changes the cached prefix and
   invalidates `cache_control` breakpoints from that point on — flatten **before**
   establishing a breakpoint, or the cache re-write can cost more than the flatten saves
   in short-lived conversations.
+
+</details>
+
+<details>
+<summary><b><code>flatten-mcp-http</code> — the in-memory engine over MCP Streamable HTTP</b></summary>
+
+```bash
+npx -y -p flatten-mcp flatten-mcp-http            # POST http://127.0.0.1:8787/mcp
+npx -y -p flatten-mcp flatten-mcp-http --port 3000 --host 0.0.0.0
+```
+
+- Serves `flatten_messages` / `unflatten_messages` — the same stateless in-memory engine
+  as the library, callable from any MCP client or hosted registry inspector. Persist the
+  returned `extracted` yourself and feed it back to restore, exactly like the library.
+- The three disk tools are **not** exposed over HTTP: they operate on the local Claude
+  Code session store, which does not exist wherever a remote client calls from. (On the
+  stdio server, `FLATTEN_INMEMORY_TOOLS=1` adds these two tools alongside the disk ones.)
+- No auth, permissive CORS, **no outbound network calls** — the tools are pure functions
+  over the request's JSON. Binds `127.0.0.1` by default; put your own proxy/auth in front
+  before exposing it further. Note the transport cost: the conversation you flatten
+  travels to this server and back — inside your own process, prefer the library.
 
 </details>
 
@@ -278,8 +316,10 @@ Operates on the project the CLI runs in; pass `project_dir` on any call to targe
 | Env var | Required | Purpose |
 | --- | --- | --- |
 | `CLAUDE_CONFIG_DIR` | no | Claude config dir whose `projects/` store is read (default `~/.claude`). Same variable Claude Code uses for profiles, so an alternate-profile server targets its own sessions automatically; override per call with `claude_dir`. |
-| `ANTHROPIC_API_KEY` | no | If set, token savings are counted **exactly** via Anthropic's free `count_tokens` (the only network call). |
+| `FLATTEN_COUNT_EXACT` | no | Set to `1` to count token savings **exactly** via Anthropic's free `count_tokens` — the only outbound call, and it needs `ANTHROPIC_API_KEY` too. Off by default: key presence alone never triggers the request (see Security). |
+| `ANTHROPIC_API_KEY` | no | The key for the exact count. Ignored by the MCP server and session CLI unless `FLATTEN_COUNT_EXACT=1`. |
 | `FLATTEN_COUNT_MODEL` | no | Model id for the exact count (default `claude-haiku-4-5-20251001`). |
+| `FLATTEN_INMEMORY_TOOLS` | no | Set to `1` to also register `flatten_messages`/`unflatten_messages` on the stdio server (see the HTTP section above). Off by default to keep the local tool surface lean. |
 
 ## Uninstall
 

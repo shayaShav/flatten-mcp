@@ -36,15 +36,23 @@
                 "${__dirname}/dist/index.js"
             ],
             "env": {
+                "FLATTEN_COUNT_EXACT": "${user_config.flatten_count_exact}",
                 "ANTHROPIC_API_KEY": "${user_config.anthropic_api_key}"
             }
         }
     },
     "user_config": {
+        "flatten_count_exact": {
+            "type": "boolean",
+            "title": "Exact token counts (network opt-in)",
+            "description": "Optional. Count token savings exactly via Anthropic's free count_tokens endpoint — the only network call the server can make. Requires the API key below; off by default.",
+            "required": false,
+            "default": false
+        },
         "anthropic_api_key": {
             "type": "string",
             "title": "Anthropic API key",
-            "description": "Optional. If set, token savings are counted exactly via Anthropic's free count_tokens endpoint instead of estimated locally.",
+            "description": "Optional. API key for the exact token count; ignored unless the exact-count opt-in above is enabled.",
             "sensitive": true,
             "required": false
         }

@@ -30,8 +30,14 @@
             },
             "environmentVariables": [
                 {
+                    "name": "FLATTEN_COUNT_EXACT",
+                    "description": "Optional. Set to 1 to count token savings exactly via Anthropic's count_tokens endpoint (requires ANTHROPIC_API_KEY). Off by default: key presence alone never triggers a network call.",
+                    "isRequired": false,
+                    "format": "string"
+                },
+                {
                     "name": "ANTHROPIC_API_KEY",
-                    "description": "Optional. If set, token savings are counted exactly via Anthropic's count_tokens endpoint instead of estimated locally.",
+                    "description": "Optional. API key for the exact token count; ignored unless FLATTEN_COUNT_EXACT=1.",
                     "isRequired": false,
                     "isSecret": true,
                     "format": "string"

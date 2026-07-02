@@ -93,6 +93,20 @@ export interface RetrieveResult {
 const TUR_ID_SUFFIX = '#tur';
 
 /**
+ * Explicit opt-in gate for the exact-count network call (issue #12). The disk
+ * path (MCP server + session CLI) contacts count_tokens only when BOTH
+ * FLATTEN_COUNT_EXACT is affirmative AND ANTHROPIC_API_KEY is set — key presence
+ * alone no longer triggers the request, because many environments export the key
+ * globally and the trigger must be user intent, not key presence. The library's
+ * async *Exact variants keep their explicit countExact parameter instead
+ * (core.ts) and are not affected by this variable.
+ */
+function exactCountOptIn(): boolean {
+    const v = (process.env.FLATTEN_COUNT_EXACT ?? '').trim().toLowerCase();
+    return (v === '1' || v === 'true' || v === 'yes' || v === 'on') && Boolean(process.env.ANTHROPIC_API_KEY);
+}
+
+/**
  * Scan assistant messages for tool_use blocks and build a map from
  * tool_use_id to { name, input }. This is needed because tool_result
  * blocks in user messages only carry tool_use_id, not the tool name.
@@ -448,11 +462,12 @@ export async function flattenSession(
     const newSize = Buffer.byteLength(newContent, 'utf-8');
     const bytesSaved = originalSize - newSize;
 
-    // Upgrade the local estimate to an exact count_tokens result when an API key
-    // is configured. Falls back silently to the estimate on any failure.
+    // Upgrade the local estimate to an exact count_tokens result when the user
+    // explicitly opted in (FLATTEN_COUNT_EXACT=1 + ANTHROPIC_API_KEY, see
+    // exactCountOptIn). Falls back silently to the estimate on any failure.
     let contextTokensSaved = estContextTokensSaved;
     let contextTokensExact = false;
-    if (process.env.ANTHROPIC_API_KEY && removedContentValues.length > 0) {
+    if (exactCountOptIn() && removedContentValues.length > 0) {
         const removedExact = await countTokensExact(toCountBlocks(removedContentValues));
         const markerExact = await countTokensExact([{ type: 'text', text: removedMarkers.join('\n') }]);
         if (removedExact != null) {
