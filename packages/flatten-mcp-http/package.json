@@ -1,0 +1,38 @@
+{
+    "name": "flatten-mcp-http",
+    "version": "1.0.0",
+    "description": "Bin-name companion for flatten-mcp: makes `npx flatten-mcp-http` work directly. Delegates to the flatten-mcp package, which ships the actual Streamable HTTP server.",
+    "type": "module",
+    "bin": {
+        "flatten-mcp-http": "bin.js"
+    },
+    "files": [
+        "bin.js",
+        "README.md",
+        "LICENSE"
+    ],
+    "engines": {
+        "node": ">=18"
+    },
+    "keywords": [
+        "mcp",
+        "streamable-http",
+        "claude",
+        "flatten",
+        "messages-api"
+    ],
+    "author": "Shaya Shaviv",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/shayaShav/flatten-mcp.git",
+        "directory": "packages/flatten-mcp-http"
+    },
+    "homepage": "https://github.com/shayaShav/flatten-mcp#readme",
+    "bugs": {
+        "url": "https://github.com/shayaShav/flatten-mcp/issues"
+    },
+    "dependencies": {
+        "flatten-mcp": "^2.1.0"
+    }
+}

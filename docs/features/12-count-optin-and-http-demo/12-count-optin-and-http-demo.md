@@ -60,6 +60,25 @@ surface:
 
 `src/version.ts` now single-sources the in-code version for both server entries.
 
+## Bin-name namespace claim (companion packages)
+
+The README (since v2.0.1) printed `npx flatten-mcp-session` / `npx flatten-mcp-cli`,
+but `npx <command>` resolves an npm **package** by that name — and none existed
+(the bins ship inside `flatten-mcp`), so the commands failed on any machine
+without the package installed, and the unregistered names were open to
+typosquatting against every circulating copy of the old docs.
+
+Fixed twice over:
+
+- All README examples now use the always-correct `npx -y -p flatten-mcp <bin>`.
+- `packages/flatten-mcp-session|cli|http` are companion packages — a one-line
+  `bin.js` delegating via the new subpath exports (`flatten-mcp/session-cli`,
+  `flatten-mcp/cli`, `flatten-mcp/http`) — that claim the three bin names on npm
+  so the direct commands work and the names cannot be claimed by anyone else.
+  They pin `flatten-mcp: ^2.1.0` (the first version with the subpath exports) and
+  are deliberately **not** npm workspaces, so the root install/CI flow is
+  untouched. Publish order: `flatten-mcp` first, then the companions.
+
 ## Status
 
 Implemented and tested: `tests/feature/count-exact-opt-in/` (fetch stubbed; gate

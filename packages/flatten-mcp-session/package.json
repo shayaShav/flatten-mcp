@@ -1,0 +1,38 @@
+{
+    "name": "flatten-mcp-session",
+    "version": "1.0.0",
+    "description": "Bin-name companion for flatten-mcp: makes `npx flatten-mcp-session` work directly. Delegates to the flatten-mcp package, which ships the actual session CLI.",
+    "type": "module",
+    "bin": {
+        "flatten-mcp-session": "bin.js"
+    },
+    "files": [
+        "bin.js",
+        "README.md",
+        "LICENSE"
+    ],
+    "engines": {
+        "node": ">=18"
+    },
+    "keywords": [
+        "mcp",
+        "claude-code",
+        "flatten",
+        "session",
+        "cli"
+    ],
+    "author": "Shaya Shaviv",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/shayaShav/flatten-mcp.git",
+        "directory": "packages/flatten-mcp-session"
+    },
+    "homepage": "https://github.com/shayaShav/flatten-mcp#readme",
+    "bugs": {
+        "url": "https://github.com/shayaShav/flatten-mcp/issues"
+    },
+    "dependencies": {
+        "flatten-mcp": "^2.1.0"
+    }
+}

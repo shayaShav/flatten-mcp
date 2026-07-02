@@ -21,6 +21,11 @@ All notable changes to flatten-mcp are documented here. The format follows
   registry inspectors and remote MCP clients can call the engine interactively. (#12)
 - `FLATTEN_INMEMORY_TOOLS=1` registers the same two in-memory tools on the stdio server
   (off by default to keep the local tool surface lean). (#12)
+- Companion packages `flatten-mcp-session`, `flatten-mcp-cli`, and `flatten-mcp-http`
+  (in `packages/`, published separately): one-line delegates that claim the bin-name npm
+  namespace so `npx <bin>` works directly — including the commands printed in pre-2.1
+  README copies — and the names cannot be squatted. Enabled by new subpath exports
+  `flatten-mcp/session-cli`, `flatten-mcp/cli`, `flatten-mcp/http`. (#12)
 
 ### Fixed
 

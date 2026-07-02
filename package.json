@@ -10,7 +10,10 @@
         ".": {
             "types": "./dist/lib.d.ts",
             "import": "./dist/lib.js"
-        }
+        },
+        "./session-cli": "./dist/session-cli.js",
+        "./cli": "./dist/cli.js",
+        "./http": "./dist/http.js"
     },
     "bin": {
         "flatten-mcp": "dist/index.js",
