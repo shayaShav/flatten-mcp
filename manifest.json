@@ -2,7 +2,7 @@
     "manifest_version": "0.3",
     "name": "flatten-mcp",
     "display_name": "flatten-mcp",
-    "version": "2.0.3",
+    "version": "2.0.4",
     "description": "Flatten Claude Code sessions: keep every prompt and event verbatim, resume at a lower token count.",
     "icon": "assets/logo.png",
     "author": {
