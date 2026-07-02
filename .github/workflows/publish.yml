@@ -17,7 +17,20 @@ concurrency:
     cancel-in-progress: false
 
 jobs:
+    # A tag push must not be able to publish a build whose tests fail.
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: '24'
+            - run: npm ci
+            - run: npm run build
+            - run: npm test
+
     publish:
+        needs: test
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v6
