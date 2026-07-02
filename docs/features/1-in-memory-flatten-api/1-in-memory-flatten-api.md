@@ -36,6 +36,13 @@ exact bulk we are trying to set aside, so this feature deliberately adds **no**
 REST API, MCP-over-HTTP transport, or new MCP tool — the package's MCP tools stay
 disk-oriented.
 
+> **Update ([#12](../12-count-optin-and-http-demo/12-count-optin-and-http-demo.md)):**
+> the engine is now *also* reachable as an MCP tool surface (`flatten-mcp-http`,
+> and `FLATTEN_INMEMORY_TOOLS=1` on the stdio server) as an explicit
+> demo/integration path for registry inspectors and remote clients. The guidance
+> above still holds for production callers — inside your own process, import the
+> library.
+
 The transformed blocks are byte-identical to the raw Messages API block shapes
 (`text`, `tool_use {id,name,input}`, `tool_result {tool_use_id, content, is_error?}`
 with `content` as `string | block[]`, `image {source:{type:base64, media_type, data}}`).
