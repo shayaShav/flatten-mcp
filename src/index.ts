@@ -9,6 +9,7 @@ import {
     resolveSessionId,
     resolveProjectDir,
     resolveClaudeDir,
+    isSafeSessionId,
 } from './session-store.js';
 
 import {
@@ -106,6 +107,17 @@ server.tool(
         claude_dir: z.string().optional().describe('Absolute path (or ~/...) to the Claude config dir whose sessions to target — the dir holding projects/, e.g. ~/.claude-2 for a second profile. Default: $CLAUDE_CONFIG_DIR if set (so a server running inside an alternate profile targets it), else ~/.claude.'),
     },
     async ({ tool_use_id, session_id, project_dir, claude_dir }) => {
+        // session_id flows straight into the backup path; reject anything that is
+        // not id-shaped so it cannot point outside the session directory.
+        if (!isSafeSessionId(session_id)) {
+            return {
+                content: [{
+                    type: 'text' as const,
+                    text: 'Error: invalid session_id — pass the exact value after "session=" in the [FLATTENED ...] marker (a session UUID).',
+                }],
+                isError: true,
+            };
+        }
         const projectDir = resolveProjectDir(project_dir);
         const claudeDir = resolveClaudeDir(claude_dir);
         const sessionDir = getSessionDir(projectDir, claudeDir);

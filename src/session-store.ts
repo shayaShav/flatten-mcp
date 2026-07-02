@@ -49,6 +49,14 @@ export function resolveClaudeDir(claudeDir?: string): string | undefined {
     return dir;
 }
 
+// Guard for session ids that flow directly into filesystem paths. retrieve_flattened
+// takes its session_id straight from a [FLATTENED ...] marker, and real ids are
+// UUIDs — anything carrying path separators or ".." segments could point the backup
+// path outside the session directory, so it is rejected before path construction.
+export function isSafeSessionId(sessionId: string): boolean {
+    return /^[A-Za-z0-9._-]+$/.test(sessionId) && !sessionId.includes('..');
+}
+
 async function streamJsonlLines(
     filePath: string,
     callback: (parsed: Record<string, unknown>, lineNumber: number) => boolean | void

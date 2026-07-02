@@ -32,104 +32,7 @@ import {
     retrieveFlattened,
 } from './flattener.js';
 import type { ContentBlock } from './types.js';
-
-const USAGE = `flatten-mcp-session — flatten Claude Code sessions from the terminal (no LLM, no tokens)
-
-Usage:
-  flatten-mcp-session flatten   [<session>] [--dry-run] [--min-size N] [--no-tool-use-result]
-  flatten-mcp-session unflatten <session>
-  flatten-mcp-session list
-  flatten-mcp-session retrieve  <session> <tool_use_id> [--out <file>]
-
-  <session>   UUID, "last", "last N", "current", or a keyword. flatten defaults to "current"
-              (the most-recent session in this project when run outside Claude Code).
-
-Shared options:
-  --project-dir <abs>   Project to target (default: current working directory)
-  --claude-dir <dir>    Claude config dir holding projects/ (default: $CLAUDE_CONFIG_DIR or ~/.claude)
-  --json                Emit machine-readable JSON instead of a human summary
-  -h, --help            Show this help`;
-
-class UsageError extends Error {}
-
-interface ParsedArgs {
-    positionals: string[];
-    projectDir?: string;
-    claudeDir?: string;
-    json: boolean;
-    dryRun: boolean;
-    minSize?: number;
-    includeToolUseResult: boolean;
-    out?: string;
-    help: boolean;
-}
-
-// Tiny dependency-free flag parser. Supports "--flag value" and "--flag=value" for
-// value flags, and bare booleans. Anything not starting with "-" is a positional.
-function parseArgs(argv: string[]): ParsedArgs {
-    const out: ParsedArgs = {
-        positionals: [],
-        json: false,
-        dryRun: false,
-        includeToolUseResult: true,
-        help: false,
-    };
-
-    const takeValue = (token: string, inlineValue: string | undefined, iter: { i: number }): string => {
-        if (inlineValue !== undefined) return inlineValue;
-        const next = argv[iter.i + 1];
-        if (next === undefined) throw new UsageError(`${token} needs a value.`);
-        iter.i += 1;
-        return next;
-    };
-
-    const iter = { i: 0 };
-    for (; iter.i < argv.length; iter.i++) {
-        const token = argv[iter.i];
-        const eq = token.startsWith('--') ? token.indexOf('=') : -1;
-        const name = eq === -1 ? token : token.slice(0, eq);
-        const inlineValue = eq === -1 ? undefined : token.slice(eq + 1);
-
-        switch (name) {
-            case '-h':
-            case '--help':
-                out.help = true;
-                break;
-            case '--json':
-                out.json = true;
-                break;
-            case '--dry-run':
-                out.dryRun = true;
-                break;
-            case '--no-tool-use-result':
-                out.includeToolUseResult = false;
-                break;
-            case '--project-dir':
-                out.projectDir = takeValue(name, inlineValue, iter);
-                break;
-            case '--claude-dir':
-                out.claudeDir = takeValue(name, inlineValue, iter);
-                break;
-            case '--out':
-                out.out = takeValue(name, inlineValue, iter);
-                break;
-            case '--min-size': {
-                const raw = takeValue(name, inlineValue, iter);
-                const n = Number(raw);
-                if (raw.trim() === '' || !Number.isFinite(n) || n < 0) {
-                    throw new UsageError(`--min-size needs a non-negative number, got: ${raw}`);
-                }
-                out.minSize = n;
-                break;
-            }
-            default:
-                if (name.startsWith('-')) throw new UsageError(`unknown option: ${name}`);
-                out.positionals.push(token);
-        }
-    }
-
-    return out;
-}
+import { USAGE, UsageError, parseArgs, resolvePositionals, type ParsedArgs } from './session-cli-core.js';
 
 function percent(part: number, whole: number | null): string {
     if (!whole || whole <= 0) return 'n/a';
@@ -172,7 +75,7 @@ function printFlattenHuman(rep: ReturnType<typeof flattenReport>): void {
 }
 
 async function cmdFlatten(args: ParsedArgs): Promise<void> {
-    const sessionInput = args.positionals[0] ?? 'current';
+    const [sessionInput = 'current'] = resolvePositionals('flatten', args.positionals, 1);
     const sessionDir = getSessionDir(resolveProjectDir(args.projectDir), resolveClaudeDir(args.claudeDir));
     const ids = await resolveSessionId(sessionInput, sessionDir);
     if (ids.length === 0) throw new UsageError('No matching sessions found.');
@@ -192,7 +95,7 @@ async function cmdFlatten(args: ParsedArgs): Promise<void> {
 }
 
 async function cmdUnflatten(args: ParsedArgs): Promise<void> {
-    const sessionInput = args.positionals[0];
+    const [sessionInput] = resolvePositionals('unflatten', args.positionals, 1);
     if (!sessionInput) throw new UsageError('unflatten needs a <session> (UUID, "last", "current", or keyword).');
 
     const sessionDir = getSessionDir(resolveProjectDir(args.projectDir), resolveClaudeDir(args.claudeDir));
@@ -232,6 +135,7 @@ async function cmdUnflatten(args: ParsedArgs): Promise<void> {
 }
 
 async function cmdList(args: ParsedArgs): Promise<void> {
+    resolvePositionals('list', args.positionals, 0);
     const sessionDir = getSessionDir(resolveProjectDir(args.projectDir), resolveClaudeDir(args.claudeDir));
     const sessions = await listSessions(sessionDir);
 
@@ -263,8 +167,7 @@ async function writeImage(id: string, data: string, mimeType: string, outArg: st
 }
 
 async function cmdRetrieve(args: ParsedArgs): Promise<void> {
-    const sessionInput = args.positionals[0];
-    const toolUseId = args.positionals[1];
+    const [sessionInput, toolUseId] = resolvePositionals('retrieve', args.positionals, 2);
     if (!sessionInput || !toolUseId) {
         throw new UsageError('retrieve needs <session> and <tool_use_id> (the id= value from a [FLATTENED ...] marker).');
     }
