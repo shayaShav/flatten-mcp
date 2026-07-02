@@ -15,7 +15,8 @@
     "bin": {
         "flatten-mcp": "dist/index.js",
         "flatten-mcp-cli": "dist/cli.js",
-        "flatten-mcp-session": "dist/session-cli.js"
+        "flatten-mcp-session": "dist/session-cli.js",
+        "flatten-mcp-http": "dist/http.js"
     },
     "files": [
         "dist",
