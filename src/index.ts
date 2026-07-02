@@ -20,7 +20,7 @@ import type { ContentBlock } from './types.js';
 
 const server = new McpServer({
     name: 'flatten-mcp',
-    version: '2.0.3',
+    version: '2.0.4',
 });
 
 // ─── Tool 1: flatten_session ────────────────────────────────────────
