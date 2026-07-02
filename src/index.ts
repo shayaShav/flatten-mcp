@@ -18,17 +18,19 @@ import {
     retrieveFlattened,
 } from './flattener.js';
 import type { ContentBlock } from './types.js';
+import { registerInMemoryTools } from './inmemory-tools.js';
+import { VERSION } from './version.js';
 
 const server = new McpServer({
     name: 'flatten-mcp',
-    version: '2.0.5',
+    version: VERSION,
 });
 
 // ─── Tool 1: flatten_session ────────────────────────────────────────
 
 server.tool(
     'flatten_session',
-    'Flatten a Claude Code session: move bulky tool results (large text output and base64 image/screenshot blocks) out of the session JSONL into a backup copy, leaving a compact [FLATTENED ...] marker. The conversation reads identically — every prompt and event stays verbatim — but resumes with far fewer context tokens. Crash-safe (atomic rewrite + a single backup holding the complete session) and reversible via unflatten_session. Reports diskBytesSaved and contextTokensSaved out of contextTokensTotal (estimated locally, or exact when ANTHROPIC_API_KEY is set). With no session_id, flattens the current live session; also accepts a UUID, "last", "last N", or "current". After flattening, /resume the session to load the lighter copy.',
+    'Flatten a Claude Code session: move bulky tool results (large text output and base64 image/screenshot blocks) out of the session JSONL into a backup copy, leaving a compact [FLATTENED ...] marker. The conversation reads identically — every prompt and event stays verbatim — but resumes with far fewer context tokens. Crash-safe (atomic rewrite + a single backup holding the complete session) and reversible via unflatten_session. Reports diskBytesSaved and contextTokensSaved out of contextTokensTotal (estimated locally, or exact when FLATTEN_COUNT_EXACT=1 and ANTHROPIC_API_KEY are both set). With no session_id, flattens the current live session; also accepts a UUID, "last", "last N", or "current". After flattening, /resume the session to load the lighter copy.',
     {
         session_id: z.string().optional().describe('Session UUID, "last", "last N", or "current". Omit to flatten the current live session.'),
         sessionId: z.string().optional().describe('camelCase alias for session_id (accepted so a camelCase call does not fail validation).'),
@@ -227,6 +229,16 @@ server.tool(
         };
     }
 );
+
+// ─── Optional in-memory tools ───────────────────────────────────────
+// Off by default to keep the local tool surface lean (tool schemas cost context
+// tokens every turn). FLATTEN_INMEMORY_TOOLS=1 adds flatten_messages /
+// unflatten_messages — useful for hosted/containerized deployments where the
+// disk tools have no session store to operate on.
+
+if (process.env.FLATTEN_INMEMORY_TOOLS === '1') {
+    registerInMemoryTools(server);
+}
 
 // ─── Start server ───────────────────────────────────────────────────
 
