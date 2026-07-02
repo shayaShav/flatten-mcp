@@ -10,6 +10,12 @@
     "homepage": "https://github.com/shayaShav/flatten-mcp#readme",
     "repository": "https://github.com/shayaShav/flatten-mcp",
     "license": "MIT",
+    "mcpServers": {
+        "flatten": {
+            "command": "npx",
+            "args": ["-y", "flatten-mcp@2.0.4"]
+        }
+    },
     "keywords": [
         "mcp",
         "model-context-protocol",
