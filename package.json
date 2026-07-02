@@ -1,6 +1,6 @@
 {
     "name": "flatten-mcp",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "mcpName": "io.github.shayaShav/flatten-mcp",
     "description": "An MCP server that flattens Claude Code sessions — keeping every prompt and event verbatim while reclaiming context tokens, so you resume the exact same raw conversation at a lower token count instead of compacting it into a lossy summary.",
     "type": "module",
