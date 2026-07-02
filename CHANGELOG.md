@@ -6,6 +6,8 @@ All notable changes to flatten-mcp are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-07-03
+
 ### Added
 
 - CI test workflow (Node 18/20/22) on every push and PR; publishing is now gated on the
@@ -109,7 +111,8 @@ Version 2.0.0 was never tagged or published; its changes first shipped here.
   over the Claude Code session store — every prompt verbatim, bulky tool output moved
   to a sidecar, fully reversible.
 
-[Unreleased]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.4...HEAD
+[Unreleased]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.5...HEAD
+[2.0.5]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.1...v2.0.2
