@@ -58,7 +58,7 @@ zero network calls by default. (Node ≥ 18, which Claude Code already runs on.)
 
 ```bash
 # Terminal: register the server user-wide (pinned; use @latest if you prefer auto-updates)
-claude mcp add flatten -s user -- npx -y flatten-mcp@2.0.5
+claude mcp add flatten -s user -- npx -y flatten-mcp@2.1.0
 
 # Optional: the /flatten slash command
 curl -fsSL https://raw.githubusercontent.com/shayaShav/flatten-mcp/main/commands/flatten.md -o ~/.claude/commands/flatten.md
@@ -91,7 +91,7 @@ In `~/.claude.json` or your project's `.mcp.json`:
 ```json
 {
     "mcpServers": {
-        "flatten": { "command": "npx", "args": ["-y", "flatten-mcp@2.0.5"] }
+        "flatten": { "command": "npx", "args": ["-y", "flatten-mcp@2.1.0"] }
     }
 }
 ```

@@ -6,6 +6,8 @@ All notable changes to flatten-mcp are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-07-03
+
 ### Changed
 
 - **Behavior change**: the exact `count_tokens` call (MCP server and session CLI) now
@@ -139,7 +141,8 @@ Version 2.0.0 was never tagged or published; its changes first shipped here.
   over the Claude Code session store — every prompt verbatim, bulky tool output moved
   to a sidecar, fully reversible.
 
-[Unreleased]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.5...HEAD
+[Unreleased]: https://github.com/shayaShav/flatten-mcp/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.5...v2.1.0
 [2.0.5]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.4...v2.0.5
 [2.0.4]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/shayaShav/flatten-mcp/compare/v2.0.2...v2.0.3
